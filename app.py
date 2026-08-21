@@ -775,7 +775,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 30,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 5 tokens de senha por dia.<br>
+                    - Gera até 5 senhas de senha por dia.<br>
                     - Acesso a contas de até 5.000 seguidores.<br>
                     - Equivalente a R$ 1,00 por dia.
                 </div>
@@ -788,7 +788,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 119,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 15 tokens de senha por dia.<br>
+                    - Gera até 15 senhas de senha por dia.<br>
                     - Acesso a contas de até 10.000 seguidores.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('premium')">Atualizar para Premium</button>
@@ -815,7 +815,7 @@ HTML_TEMPLATE = """
     <div class="payment-modal-overlay" id="payment-modal">
         <div class="payment-modal-content">
             <div class="plan-title">Pagamento via PIX</div>
-            <div class="pix-trust-msg">Ativação instantânea após o pagamento. Aumente sua conversão.</div>
+            <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
             
             <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
                 O plano será ativado para a sessão de ID:<br>
