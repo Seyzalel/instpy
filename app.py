@@ -643,6 +643,20 @@ HTML_TEMPLATE = """
             80%, 100% { text-shadow: .25em 0 0 var(--text-secondary), .5em 0 0 var(--text-secondary);}
         }
 
+        /* Spinner Animado */
+        .spinner {
+            border: 3px solid rgba(0,0,0,0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: var(--ig-blue);
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
         .floating-whatsapp {
             position: fixed;
             bottom: 20px;
@@ -690,6 +704,10 @@ HTML_TEMPLATE = """
     </div>
 
     {% if whatsapp_number %}
+    <div style="margin-top: 25px; font-size: 13px; color: var(--text-secondary); text-align: center;">
+        Precisa de ajuda? <a href="https://wa.me/{{ whatsapp_number }}" target="_blank" style="color: var(--ig-blue); text-decoration: none; font-weight: 600;">Suporte WhatsApp</a>
+    </div>
+
     <a href="https://wa.me/{{ whatsapp_number }}" target="_blank" class="floating-whatsapp">
         Suporte WhatsApp
     </a>
@@ -797,22 +815,36 @@ HTML_TEMPLATE = """
     <div class="payment-modal-overlay" id="payment-modal">
         <div class="payment-modal-content">
             <div class="plan-title">Pagamento via PIX</div>
-            <div class="pix-trust-msg">Ativacao instantanea apos o pagamento. Aumente sua conversao.</div>
+            <div class="pix-trust-msg">Ativação instantânea após o pagamento. Aumente sua conversão.</div>
             
-            <div class="pix-qr-container">
-                <img src="" alt="QR Code PIX" class="pix-qr" id="pix-qr-img">
+            <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
+                O plano será ativado para a sessão de ID:<br>
+                <b style="color: var(--text-primary); font-family: monospace; font-size: 13px;">{{ session_id }}</b>
             </div>
             
-            <div class="pix-copy-area">
-                <div class="pix-hash" id="pix-hash-text">Aguarde, gerando PIX...</div>
-                <button class="copy-btn" id="pix-copy-btn" style="width: 100%" onclick="copyPix()">Copiar Código PIX</button>
+            <!-- ESTADO DE CARREGAMENTO -->
+            <div id="pix-loading" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0;">
+                <div class="spinner"></div>
+                <div class="loading-dots" style="margin-top: 15px; font-size: 13px;">Gerando cobrança PIX</div>
+            </div>
+
+            <!-- ESTADO DO PIX GERADO -->
+            <div id="pix-content" style="display: none;">
+                <div class="pix-qr-container">
+                    <img src="" alt="QR Code PIX" class="pix-qr" id="pix-qr-img">
+                </div>
+                
+                <div class="pix-copy-area">
+                    <div class="pix-hash" id="pix-hash-text"></div>
+                    <button class="copy-btn" id="pix-copy-btn" style="width: 100%; margin-top: 8px;" onclick="copyPix()">Copiar Código PIX</button>
+                </div>
+                
+                <div class="pix-timer">O pagamento expira em 5 minutos.</div>
+                
+                <div class="loading-dots">Aguardando pagamento</div>
             </div>
             
-            <div class="pix-timer">O pagamento expira em 5 minutos.</div>
-            
-            <div class="loading-dots">Aguardando pagamento</div>
-            
-            <button class="plan-btn" style="background-color: var(--text-secondary); margin-top: 15px;" onclick="cancelPayment()">Cancelar</button>
+            <button class="plan-btn" style="background-color: var(--input-bg); color: var(--text-primary); margin-top: 15px;" onclick="cancelPayment()">Cancelar</button>
         </div>
     </div>
 
@@ -975,8 +1007,9 @@ HTML_TEMPLATE = """
             document.getElementById('upgrade-modal').style.display = 'none';
             document.getElementById('payment-modal').style.display = 'flex';
             
-            document.getElementById('pix-hash-text').innerText = "Aguarde, gerando PIX...";
-            document.getElementById('pix-qr-img').src = "";
+            // Oculta área de pix gerada e mostra o loading
+            document.getElementById('pix-loading').style.display = 'flex';
+            document.getElementById('pix-content').style.display = 'none';
             document.getElementById('pix-copy-btn').disabled = true;
 
             try {
@@ -993,9 +1026,14 @@ HTML_TEMPLATE = """
                     return;
                 }
                 
+                // Preenche os dados recebidos na View
                 document.getElementById('pix-qr-img').src = "data:image/png;base64," + data.qr_base64;
                 document.getElementById('pix-hash-text').innerText = data.pix_copy_paste;
                 document.getElementById('pix-copy-btn').disabled = false;
+                
+                // Transição suave para o Pix gerado
+                document.getElementById('pix-loading').style.display = 'none';
+                document.getElementById('pix-content').style.display = 'block';
                 
                 // Inicia polling
                 pollInterval = setInterval(() => checkPaymentStatus(data.transaction_id), 5000);
