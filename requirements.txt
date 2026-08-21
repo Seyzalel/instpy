@@ -1,0 +1,6 @@
+Flask
+instagrapi
+requests
+pymongo
+qrcode
+Pillow
