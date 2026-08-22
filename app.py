@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, make_response, redirect
+from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort
 from instagrapi import Client
 from pymongo import MongoClient
 import re
@@ -12,7 +12,11 @@ import json
 import base64
 import io
 import qrcode
+import hashlib
+import threading
+from collections import defaultdict
 from datetime import datetime, timedelta
+from urllib.parse import unquote
 
 app = Flask(__name__)
 
@@ -29,24 +33,115 @@ try:
     users_collection = db["users"]            # Coleção para gerenciar planos dos usuários
     settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, etc)
     payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
+    profiles_cache_collection = db["profiles_cache"] # NOVA: Coleção para salvar banda de proxy
     print("Sistema integrado e conectado ao MongoDB com sucesso.")
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
 
 # ==========================================
-# CONFIGURAÇÃO DA INSTAGRAPI
+# CACHE EM MEMÓRIA RAM (ECONOMIA MÁXIMA)
 # ==========================================
-cl = Client()
+MEMORY_CACHE = {}
 
+# ==========================================
+# SISTEMA DE PROTEÇÃO ANTI-BOT E FIREWALL
+# ==========================================
+IP_HISTORY = defaultdict(list)
+RATE_LIMIT_MAX_REQ = 100
+RATE_LIMIT_WINDOW = 60
+BANNED_IPS = set()
+IP_BANS = {}
+BAN_TIME = 600
+SUSPICIOUS_UA_REGEX = re.compile(
+    r'(bot|spider|crawler|scraper|curl|wget|python|urllib|libwww|httpclient|java|php|postman|insomnia|'
+    r'headless|phantom|selenium|puppeteer|playwright|cypress|slurp|yahoo|yandex|baidu|teoma|alexa|'
+    r'nikto|nmap|sqlmap|mechanize|scrapy|zgrab|nucleus|httpx|masscan)',
+    re.IGNORECASE
+)
+
+@app.before_request
+def bot_firewall():
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if client_ip:
+        client_ip = client_ip.split(',')[0].strip()
+    else:
+        client_ip = 'unknown'
+        
+    now = time.time()
+    
+    # Verifica se está banido
+    if client_ip in IP_BANS:
+        if now < IP_BANS[client_ip]:
+            abort(403, description="Acesso negado: IP bloqueado por comportamento suspeito (Anti-Bot Ativado).")
+        else:
+            del IP_BANS[client_ip]
+            
+    # Rate Limit
+    IP_HISTORY[client_ip] = [timestamp for timestamp in IP_HISTORY[client_ip] if now - timestamp < RATE_LIMIT_WINDOW]
+    IP_HISTORY[client_ip].append(now)
+    
+    if len(IP_HISTORY[client_ip]) > RATE_LIMIT_MAX_REQ:
+        IP_BANS[client_ip] = now + BAN_TIME
+        abort(429, description="Too Many Requests: Tráfego anômalo detectado. Proteção de proxy ativada.")
+        
+    # Bloqueia bots conhecidos por User-Agent
+    ua = request.headers.get('User-Agent', '')
+    if SUSPICIOUS_UA_REGEX.search(ua):
+        IP_BANS[client_ip] = now + BAN_TIME
+        abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
+
+# ==========================================
+# CONFIGURAÇÃO DA INSTAGRAPI (OTIMIZADA)
+# ==========================================
 SESSION_ID = "244877207%3AAr21uf6FwpaBd0%3A16%3AAYjowzk6z7VN2wEA5C372L5rHeUQTnpQogFR8rt83g"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
 
-try:
-    cl.set_proxy(PROXY_URL)
-    cl.login_by_sessionid(SESSION_ID)
-    print("Sistema integrado e autenticado no Instagram com sucesso.")
-except Exception as e:
-    print(f"Aviso de sistema: Falha na inicialização da sessão Instagrapi. Detalhe: {e}")
+insta_client_singleton = None
+insta_lock = threading.Lock()
+
+def get_sticky_proxy(sessionid):
+    """
+    Força a rede proxy a manter o MESMO IP (Sticky IP) baseado na sessão.
+    Evita a rotação desnecessária de IPs que faz o Instagram baixar dados de segurança pesados.
+    """
+    try:
+        if "@" in PROXY_URL:
+            protocol, rest = PROXY_URL.split('://')
+            credentials, address = rest.split('@')
+            user, pwd = credentials.split(':', 1)
+            
+            sid_hash = hashlib.md5(sessionid.encode()).hexdigest()[:8]
+            if "-session-" not in user:
+                sticky_user = f"{user}-session-{sid_hash}"
+                return f"{protocol}://{sticky_user}:{pwd}@{address}"
+    except Exception:
+        pass
+    return PROXY_URL
+
+def get_insta_client():
+    """
+    Inicia o Instagrapi APENAS quando alguém pesquisa algo (Lazy Load).
+    Evita gastar franquia de proxy em reinicializações do servidor.
+    """
+    global insta_client_singleton
+    with insta_lock:
+        if insta_client_singleton is None:
+            print("Inicializando sessão Instagrapi (Lazy Load)...")
+            try:
+                cl = Client()
+                sticky_proxy = get_sticky_proxy(SESSION_ID)
+                cl.set_proxy(sticky_proxy)
+                cl.login_by_sessionid(SESSION_ID)
+                insta_client_singleton = cl
+                print("Instagrapi carregado e proxy fixado com sucesso.")
+            except Exception as e:
+                print(f"Erro ao inicializar Instagrapi: {e}")
+                # Fallback sem sticky
+                cl = Client()
+                cl.set_proxy(PROXY_URL)
+                cl.login_by_sessionid(SESSION_ID)
+                insta_client_singleton = cl
+        return insta_client_singleton
 
 # ==========================================
 # CONFIGURAÇÃO GGPIXAPI
@@ -93,10 +188,6 @@ META_PIXEL_ID = "2263127927859713"
 META_ACCESS_TOKEN = "EAAY3pJasrWUBSBFHDzEBUyZCKXQSILBT6o0fhuPipIUp3KUg0BtZBcSsIJM4BRJFHrwnJb55wtEjbigGFlx2ZAFyN4DpxI02Tm8wchsLBo42IPbUSFdSzZBunpplyiYFcXZBYWzFjt0XerPSYgzBwsZBYxdu7fO8B8h4OQLTlqPo0TBsGqXVOHdFd6N7iyNEFE8wZDZD"
 
 def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id):
-    """
-    Envia o evento 'Purchase' para a Meta via Conversions API.
-    Acompanha o valor correto baseado no plano assinado pelo usuário.
-    """
     url = f"https://graph.facebook.com/v19.0/{META_PIXEL_ID}/events"
     
     if plan_requested == 'pro':
@@ -112,7 +203,7 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
                 "event_name": "Purchase",
                 "event_time": int(time.time()),
                 "action_source": "website",
-                "event_id": transaction_id,  # Utilizado pela Meta para deduplicação
+                "event_id": transaction_id, 
                 "user_data": {
                     "client_ip_address": client_ip,
                     "client_user_agent": user_agent,
@@ -135,12 +226,10 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     except Exception as e:
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
-
 # ==========================================
-# TEMPLATES HTML
+# TEMPLATES HTML (INTACTOS)
 # ==========================================
 
-# 1. Frontend Principal
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -1567,8 +1656,22 @@ def get_target_info():
             
     username = username.replace('@', '').strip()
 
+    # --- CAMADA 1: CACHE NA MEMÓRIA RAM (CONSUMO ZERO) ---
+    if username in MEMORY_CACHE:
+        return jsonify(MEMORY_CACHE[username])
+        
+    # --- CAMADA 2: CACHE NO MONGODB (CONSUMO ZERO DE PROXY) ---
+    cached_db = profiles_cache_collection.find_one({"username_buscado": username})
+    if cached_db:
+        del cached_db['_id'] # Remove _id do mongo antes de jsonify
+        MEMORY_CACHE[username] = cached_db # Salva na RAM para a próxima ser ainda mais rápida
+        return jsonify(cached_db)
+
+    # --- CAMADA 3: INSTAGRAPI (APENAS SE O PERFIL NUNCA FOI PESQUISADO ANTES) ---
     try:
-        user_info = cl.user_info_by_username(username)
+        # Só inicializa e conecta o instagrapi AQUI. (Lazy Loading)
+        client_insta = get_insta_client()
+        user_info = client_insta.user_info_by_username(username)
         
         try:
             activities_collection.insert_one({
@@ -1580,16 +1683,26 @@ def get_target_info():
             })
         except Exception as db_err:
             print(f"Erro db: {db_err}")
-        
-        return jsonify({
+            
+        result_data = {
             "username": user_info.username,
             "full_name": user_info.full_name,
             "profile_pic": str(user_info.profile_pic_url),
-            "biography": user_info.biography,
+            "biography": getattr(user_info, 'biography', ''),
             "follower_count": user_info.follower_count,
             "following_count": user_info.following_count,
-            "is_verified": getattr(user_info, 'is_verified', False)
-        })
+            "is_verified": getattr(user_info, 'is_verified', False),
+            "username_buscado": username # Chave para o BD
+        }
+        
+        # Salva o resultado no banco de dados e na memória RAM para as próximas pesquisas
+        profiles_cache_collection.insert_one(result_data.copy())
+        # Remove a chave username_buscado antes de mandar para o frontend e RAM (sujeira)
+        del result_data["username_buscado"]
+        MEMORY_CACHE[username] = result_data
+        
+        return jsonify(result_data)
+        
     except Exception as e:
         try:
             activities_collection.insert_one({
