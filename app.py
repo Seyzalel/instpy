@@ -1881,7 +1881,9 @@ def checkout():
     payer_cpf = "57174090877"
     
     if gateway == "paradise":
-        pix_data = criar_cobranca_pix_paradise(valor_centavos / 100, desc, payer_name, payer_cpf)  # Paradise usa Decimal/Reais (ex: 30.00) ou Centavos? Depende da lib. No script teste a Paradise usou 1500 (centavos). Assim assumiremos centavos para o padrão ou manteremos inteiro do `valor_centavos`. A API paradise aceitou `1500` sem casa decimal para R$15, logo `valor_centavos` serve! 
+        # CORREÇÃO: A API Paradise usa centavos (3000 = R$ 30,00). 
+        # Removida a divisão por 100 para garantir que o valor seja exato.
+        pix_data = criar_cobranca_pix_paradise(valor_centavos, desc, payer_name, payer_cpf)
         if not pix_data:
             return jsonify({"error": "Falha na comunicacao com provedor Paradise."}), 500
     else:
