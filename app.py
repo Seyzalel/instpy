@@ -656,25 +656,6 @@ HTML_TEMPLATE = """
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-
-        .floating-whatsapp {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background-color: #25D366;
-            color: white;
-            border: none;
-            padding: 12px 20px;
-            border-radius: 24px;
-            font-size: 13px;
-            font-weight: bold;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-            cursor: pointer;
-            z-index: 999;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-        }
     </style>
 </head>
 <body>
@@ -707,10 +688,6 @@ HTML_TEMPLATE = """
     <div style="margin-top: 25px; font-size: 13px; color: var(--text-secondary); text-align: center;">
         Precisa de ajuda? <a href="https://wa.me/{{ whatsapp_number }}" target="_blank" style="color: var(--ig-blue); text-decoration: none; font-weight: 600;">Suporte WhatsApp</a>
     </div>
-
-    <a href="https://wa.me/{{ whatsapp_number }}" target="_blank" class="floating-whatsapp">
-        Suporte WhatsApp
-    </a>
     {% endif %}
 
     <!-- Modal Fullscreen sem bordas/cards -->
@@ -775,7 +752,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 30,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 5 senhas de senha por dia.<br>
+                    - Gera até 5 tokens de senha por dia.<br>
                     - Acesso a contas de até 5.000 seguidores.<br>
                     - Equivalente a R$ 1,00 por dia.
                 </div>
@@ -788,7 +765,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 119,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 15 senhas de senha por dia.<br>
+                    - Gera até 15 tokens de senha por dia.<br>
                     - Acesso a contas de até 10.000 seguidores.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('premium')">Atualizar para Premium</button>
@@ -815,7 +792,7 @@ HTML_TEMPLATE = """
     <div class="payment-modal-overlay" id="payment-modal">
         <div class="payment-modal-content">
             <div class="plan-title">Pagamento via PIX</div>
-            <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
+            <div class="pix-trust-msg">Ativação instantânea após o pagamento. Aumente sua conversão.</div>
             
             <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
                 O plano será ativado para a sessão de ID:<br>
@@ -1393,16 +1370,24 @@ def get_or_create_user(session_id):
 
 @app.route('/')
 def index():
+    # Detecta se é apenas um prefetch/preload do navegador na barra de pesquisa
+    is_prefetch = request.headers.get('Purpose') == 'prefetch' or \
+                  request.headers.get('X-Purpose') == 'preview' or \
+                  request.headers.get('Sec-Fetch-Dest') in ['empty', 'image', 'script', 'style']
+
     session_id = request.cookies.get('user_session_id')
     is_new_session = False
+    user_plan = "basic"
     
     if not session_id:
         session_id = uuid.uuid4().hex
         is_new_session = True
+    else:
+        # Se a sessão já existe no cookie, buscamos o plano no banco caso a conta já tenha sido criada (interagida)
+        user = users_collection.find_one({"session_id": session_id})
+        if user:
+            user_plan = user.get("plan", "basic")
 
-    # Garante que o usuário exista na coleção de planos
-    user = get_or_create_user(session_id)
-    
     # Busca configurações globais (WhatsApp)
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
@@ -1410,12 +1395,13 @@ def index():
     rendered_html = render_template_string(
         HTML_TEMPLATE, 
         session_id=session_id, 
-        user_plan=user.get("plan", "basic"),
+        user_plan=user_plan,
         whatsapp_number=whatsapp_number
     )
     response = make_response(rendered_html)
 
-    if is_new_session:
+    # Só define o cookie se for uma nova sessão E não for um acesso fantasma (prefetch)
+    if is_new_session and not is_prefetch:
         expiration_date = datetime.now() + timedelta(days=3650)
         response.set_cookie('user_session_id', session_id, expires=expiration_date)
 
@@ -1496,6 +1482,10 @@ def get_target_info():
 
     if not target_input:
         return jsonify({"error": "Nenhum dado fornecido."}), 400
+
+    # O usuário interagiu com o site. Agora sim criamos a conta dele no banco de dados, se ainda não existir.
+    if session_id != 'sessao_nao_identificada':
+        get_or_create_user(session_id)
 
     username = target_input
     
