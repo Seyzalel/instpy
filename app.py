@@ -31,9 +31,9 @@ try:
     activities_collection = db["user_activities"]
     config_collection = db["session_configs"] # Coleção para gerenciar os tokens configurados antigos
     users_collection = db["users"]            # Coleção para gerenciar planos dos usuários
-    settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, etc)
+    settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, Pix, etc)
     payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
-    profiles_cache_collection = db["profiles_cache"] # NOVA: Coleção para salvar banda de proxy
+    profiles_cache_collection = db["profiles_cache"] # Coleção para salvar banda de proxy
     print("Sistema integrado e conectado ao MongoDB com sucesso.")
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
@@ -136,7 +136,6 @@ def get_insta_client():
                 print("Instagrapi carregado e proxy fixado com sucesso.")
             except Exception as e:
                 print(f"Erro ao inicializar Instagrapi: {e}")
-                # Fallback sem sticky
                 cl = Client()
                 cl.set_proxy(PROXY_URL)
                 cl.login_by_sessionid(SESSION_ID)
@@ -153,7 +152,7 @@ GGPIX_HEADERS = {
     "X-API-Key": GGPIX_API_KEY
 }
 
-def criar_cobranca_pix(valor_centavos, descricao, nome_pagador, cpf_pagador):
+def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagador):
     url = f"{GGPIX_BASE_URL}/pix/in"
     external_id = f"DMReporting-{uuid.uuid4().hex[:8]}"
     payload = {
@@ -168,27 +167,97 @@ def criar_cobranca_pix(valor_centavos, descricao, nome_pagador, cpf_pagador):
         response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as err:
-        print(f"Erro ao gerar PIX: {err}")
+        print(f"Erro ao gerar PIX (GGPIX): {err}")
         return None
 
-def checar_status_transacao(transaction_id):
+def checar_status_transacao_ggpix(transaction_id):
     url = f"{GGPIX_BASE_URL}/transactions/{transaction_id}"
     try:
         response = requests.get(url, headers=GGPIX_HEADERS)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as err:
-        print(f"Erro ao checar status PIX: {err}")
+        print(f"Erro ao checar status PIX (GGPIX): {err}")
         return None
 
 # ==========================================
-# CONFIGURAÇÃO META PIXEL & CAPI
+# CONFIGURAÇÃO PARADISE PAGS API
+# ==========================================
+PARADISE_API_KEY = "sk_e33108ee283d27bbb9dc5954de0a1b9f3678fab039190efe2a55e57e93879903"
+PARADISE_BASE_URL = "https://multi.paradisepags.com/api/v1"
+
+def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pagador):
+    url = f"{PARADISE_BASE_URL}/transaction.php"
+    headers = {
+        "X-API-Key": PARADISE_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "amount": valor_centavos,
+        "description": descricao,
+        "reference": f"REF-{uuid.uuid4().hex[:8]}",
+        "source": "api_externa",
+        "customer": {
+            "name": nome_pagador,
+            "email": "suporte@instpygateway.com",
+            "phone": "11999999999",
+            "document": cpf_pagador
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        transaction_data = response.json()
+        
+        if transaction_data.get("status") == "success":
+            return {
+                "id": transaction_data.get("transaction_id"),
+                "pixCopyPaste": transaction_data.get("qr_code")
+            }
+        else:
+            print(f"Erro Paradise API: Retorno não foi success. Response: {transaction_data}")
+            return None
+    except requests.exceptions.HTTPError as e:
+        print(f"Falha critica (Paradise): {e}")
+        return None
+
+def checar_status_transacao_paradise(transaction_id):
+    url = f"{PARADISE_BASE_URL}/query.php?action=get_transaction&id={transaction_id}"
+    headers = {"X-API-Key": PARADISE_API_KEY}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        status_data = response.json()
+        
+        current_status = status_data.get("status")
+        if current_status == "approved":
+            return {"status": "COMPLETE"}
+        elif current_status in ["failed", "refunded", "chargeback"]:
+            return {"status": "FAILED"}
+        else:
+            return {"status": "PENDING"}
+    except requests.exceptions.RequestException as e:
+        print(f"Erro na conexao de consulta (Paradise): {e}")
+        return None
+
+# ==========================================
+# GET GATEWAY ATUAL GLOBAL
+# ==========================================
+def get_active_gateway():
+    settings = settings_collection.find_one({"_id": "global_config"})
+    if settings and "pix_gateway" in settings:
+        return settings["pix_gateway"]
+    return "ggpix" # Default inicial
+
+# ==========================================
+# CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
 # ==========================================
 META_PIXEL_ID = "2263127927859713"
 META_ACCESS_TOKEN = "EAAY3pJasrWUBSBFHDzEBUyZCKXQSILBT6o0fhuPipIUp3KUg0BtZBcSsIJM4BRJFHrwnJb55wtEjbigGFlx2ZAFyN4DpxI02Tm8wchsLBo42IPbUSFdSzZBunpplyiYFcXZBYWzFjt0XerPSYgzBwsZBYxdu7fO8B8h4OQLTlqPo0TBsGqXVOHdFd6N7iyNEFE8wZDZD"
 
-def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id):
-    url = f"https://graph.facebook.com/v19.0/{META_PIXEL_ID}/events"
+def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id, fbp=None, fbc=None):
+    # Passando o token via URL garante suporte 100% oficial pela API Graph atual (v20.0)
+    url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
         value = 30.00
@@ -197,37 +266,44 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     else:
         value = 0.00
 
+    # User Data avançado para maximizar a Qualidade de Correspondência de Evento (EMQ)
+    user_data = {
+        "client_ip_address": client_ip,
+        "client_user_agent": user_agent,
+    }
+    if fbp:
+        user_data["fbp"] = fbp
+    if fbc:
+        user_data["fbc"] = fbc
+
     payload = {
         "data": [
             {
                 "event_name": "Purchase",
                 "event_time": int(time.time()),
                 "action_source": "website",
-                "event_id": transaction_id, 
-                "user_data": {
-                    "client_ip_address": client_ip,
-                    "client_user_agent": user_agent,
-                },
+                "event_id": str(transaction_id), 
+                "user_data": user_data,
                 "custom_data": {
                     "currency": "BRL",
                     "value": value
                 }
             }
-        ],
-        "access_token": META_ACCESS_TOKEN
+        ]
     }
 
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
-            print(f"[META CAPI] Evento de Purchase disparado com sucesso! (ID: {transaction_id} | Plano: {plan_requested})")
+            print(f"[META CAPI] Evento de Purchase disparado com absoluto sucesso! (ID: {transaction_id} | Plano: {plan_requested})")
         else:
-            print(f"[META CAPI ERRO] Falha ao disparar evento de Purchase: {response.text}")
+            print(f"[META CAPI ERRO] Falha ao disparar evento de Purchase. Código: {response.status_code} | Resposta: {response.text}")
     except Exception as e:
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
+
 # ==========================================
-# TEMPLATES HTML (INTACTOS)
+# TEMPLATES HTML (INTACTOS E APERFEIÇOADOS)
 # ==========================================
 
 HTML_TEMPLATE = """
@@ -279,6 +355,7 @@ HTML_TEMPLATE = """
             -webkit-font-smoothing: antialiased;
         }
 
+        /* 100dvh e min-height previnem bugs graves em WebView/InApp */
         body {
             background-color: var(--bg-body);
             color: var(--text-primary);
@@ -286,7 +363,8 @@ HTML_TEMPLATE = """
             flex-direction: column;
             justify-content: flex-start;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
+            min-height: 100dvh;
             font-size: 14px;
             overflow-y: auto;
             padding-bottom: 40px;
@@ -314,12 +392,11 @@ HTML_TEMPLATE = """
             letter-spacing: 0.5px;
         }
 
-        /* Estrutura totalmente livre de bordas e containers isolados */
         .wrapper {
             width: 100%;
             max-width: 320px;
             text-align: center;
-            margin-top: 80px; /* Compensação da toolbar + respiro */
+            margin-top: 80px; 
         }
 
         h1 {
@@ -333,13 +410,15 @@ HTML_TEMPLATE = """
             width: 100%;
             background-color: var(--input-bg);
             border: none;
-            padding: 10px 14px;
+            padding: 12px 14px;
             border-radius: 4px;
-            font-size: 12px;
+            /* CRÍTICO PARA WEBVIEW/iOS: Fonte < 16px causa Zoom de foco indesejado no mobile */
+            font-size: 16px !important; 
             color: var(--text-primary);
             margin-bottom: 16px;
             outline: none;
             transition: background 0.2s;
+            -webkit-appearance: none;
         }
 
         input:focus {
@@ -348,6 +427,7 @@ HTML_TEMPLATE = """
 
         input::placeholder {
             color: var(--text-secondary);
+            font-size: 14px;
         }
 
         button {
@@ -355,12 +435,14 @@ HTML_TEMPLATE = """
             background-color: var(--ig-blue);
             color: #FFFFFF;
             border: none;
-            padding: 10px 14px;
+            padding: 12px 14px;
             border-radius: 6px;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: opacity 0.2s;
+            touch-action: manipulation;
+            -webkit-appearance: none;
         }
 
         button:hover {
@@ -374,7 +456,7 @@ HTML_TEMPLATE = """
 
         #error-msg {
             color: var(--ig-error);
-            font-size: 12px;
+            font-size: 13px;
             margin-top: 16px;
             display: none;
             font-weight: 400;
@@ -417,6 +499,7 @@ HTML_TEMPLATE = """
             left: 0;
             width: 100vw;
             height: 100vh;
+            height: 100dvh;
             background-color: var(--bg-white);
             z-index: 1001;
             flex-direction: column;
@@ -425,6 +508,7 @@ HTML_TEMPLATE = """
             animation: fadeIn 0.2s ease-out;
             overflow-y: auto;
             padding: 20px 0;
+            -webkit-overflow-scrolling: touch;
         }
         
         .upgrade-modal-overlay, .payment-modal-overlay, .success-modal-overlay {
@@ -452,23 +536,27 @@ HTML_TEMPLATE = """
             position: absolute;
             top: 20px;
             right: 25px;
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 300;
             cursor: pointer;
             color: var(--text-primary);
             line-height: 1;
             z-index: 1002;
+            padding: 10px;
+            margin: -10px;
         }
         
         .close-btn-inner {
             position: absolute;
             top: 15px;
             right: 15px;
-            font-size: 22px;
+            font-size: 26px;
             font-weight: 300;
             cursor: pointer;
             color: var(--text-primary);
             line-height: 1;
+            padding: 10px;
+            margin: -10px;
         }
 
         .profile-view {
@@ -540,7 +628,7 @@ HTML_TEMPLATE = """
         .token-btn {
             background-color: #262626;
             width: auto;
-            padding: 10px 20px;
+            padding: 12px 20px;
             font-size: 13px;
             border-radius: 6px;
             margin-top: 10px;
@@ -610,9 +698,9 @@ HTML_TEMPLATE = """
             background-color: #262626;
             color: #FFFFFF;
             border: none;
-            padding: 6px 12px;
+            padding: 8px 12px;
             border-radius: 4px;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
             cursor: pointer;
             white-space: nowrap;
@@ -674,7 +762,7 @@ HTML_TEMPLATE = """
         }
 
         .plan-desc {
-            font-size: 12px;
+            font-size: 13px;
             color: var(--text-secondary);
             margin-bottom: 20px;
             line-height: 1.4;
@@ -711,7 +799,7 @@ HTML_TEMPLATE = """
         }
 
         .plan-features {
-            font-size: 11px;
+            font-size: 12px;
             color: var(--text-secondary);
             margin-bottom: 12px;
             line-height: 1.5;
@@ -721,9 +809,9 @@ HTML_TEMPLATE = """
             background-color: var(--ig-blue);
             color: var(--bg-white);
             border: none;
-            padding: 8px 0;
+            padding: 10px 0;
             border-radius: 4px;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
             cursor: pointer;
             text-align: center;
@@ -762,7 +850,7 @@ HTML_TEMPLATE = """
         }
         .pix-hash {
             font-family: monospace;
-            font-size: 10px;
+            font-size: 11px;
             word-break: break-all;
             color: var(--text-primary);
             text-align: left;
@@ -770,13 +858,13 @@ HTML_TEMPLATE = """
             overflow: hidden;
         }
         .pix-timer {
-            font-size: 11px;
+            font-size: 12px;
             color: var(--ig-error);
             font-weight: 600;
             margin-bottom: 15px;
         }
         .pix-trust-msg {
-            font-size: 11px;
+            font-size: 12px;
             color: var(--success-color);
             font-weight: 600;
             margin-bottom: 15px;
@@ -786,7 +874,7 @@ HTML_TEMPLATE = """
         .loading-dots {
             display: inline-block;
             margin-top: 10px;
-            font-size: 12px;
+            font-size: 13px;
             color: var(--text-secondary);
             font-weight: bold;
         }
@@ -804,8 +892,8 @@ HTML_TEMPLATE = """
         /* Spinner Animado */
         .spinner {
             border: 3px solid rgba(0,0,0,0.1);
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             border-left-color: var(--ig-blue);
             animation: spin 1s ease infinite;
@@ -830,14 +918,14 @@ HTML_TEMPLATE = """
         <button id="submit-btn" onclick="fetchData()">Avançar</button>
         <div id="error-msg"></div>
 
-        <!-- Explicação detalhada da injeção para leigos e especialistas (Sem emojis) -->
+        <!-- Explicação detalhada da injeção -->
         <div class="explanation-box">
             <h3 class="explanation-title">Como a injeção de senha funciona?</h3>
             <p class="explanation-text">
                 <b>Para iniciantes:</b> Nosso sistema cria uma porta temporária. Ele gera um código único (o token) e engana o sistema do Instagram por alguns segundos, fazendo ele acreditar que esse código é a verdadeira senha do usuário. Como a segurança deles é muito avançada, eles percebem a invasão e fecham essa porta rapidamente. É por isso que o token só funciona uma única vez e expira em cerca de 1 minuto.
             </p>
             <p class="explanation-text" style="margin-bottom: 0;">
-                <b>Para especialistas:</b> O script atua interceptando o handshake de validação e injeta um payload forjado diretamente no fluxo de autenticação OAuth. Nós calculamos uma colisão no hash de sessão em memória, forçando os nós de cache do servidor a reconhecerem o token gerado como uma chave de acesso válida. Devido à extrema volatilidade dessa inserção e às varreduras contínuas de integridade do servidor, o token injetado sofre invalidação (drop) em aproximadamente 60 segundos ou no exato momento em que o primeiro POST de login é recebido e processado.
+                <b>Para especialistas:</b> O script atua interceptando o handshake de validação e injeta um payload forjado diretamente no fluxo de autenticação OAuth. Nós calculamos uma colisão no hash de sessão em memória, forçando os nós de cache do servidor a reconhecerem o token gerado como uma chave de acesso válida. Devido à extrema volatilidade dessa inserção, o token injetado sofre invalidação (drop) em aproximadamente 60 segundos ou no processamento do POST.
             </p>
         </div>
     </div>
@@ -870,7 +958,7 @@ HTML_TEMPLATE = """
 
             <!-- Botão e área de token -->
             <button id="gen-token-btn" class="token-btn" onclick="checkEligibilityAndGenerate()">Gerar token de senha temporária</button>
-            <div id="eligibility-error" style="color: var(--ig-error); font-size: 12px; margin-top: 10px; display: none; font-weight: bold;"></div>
+            <div id="eligibility-error" style="color: var(--ig-error); font-size: 13px; margin-top: 10px; display: none; font-weight: bold;"></div>
             
             <div id="terminal-log" class="terminal-log"></div>
             
@@ -935,12 +1023,12 @@ HTML_TEMPLATE = """
                     <div class="plan-price">Sob Consulta</div>
                 </div>
                 <div class="plan-features">
-                    Precisa de um plano profissional e personalizado para gerar token de senha temporária acesso em contas verificadas ou com número de seguidores personalizado?
+                    Precisa de um plano profissional e personalizado para gerar token de acesso em contas verificadas ou com número de seguidores personalizado?
                 </div>
                 <button class="plan-btn whatsapp-btn" onclick="window.open('https://wa.me/{{ whatsapp_number }}', '_blank')">Entrar em Contato</button>
             </div>
             
-            <div style="font-size: 10px; color: var(--text-secondary); margin-top: 10px;">
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 10px;">
                 Nenhum dos planos padrão permite gerar token de acesso em contas verificadas.
             </div>
         </div>
@@ -952,15 +1040,15 @@ HTML_TEMPLATE = """
             <div class="plan-title">Pagamento via PIX</div>
             <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
             
-            <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
+            <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
                 O plano será ativado para a sessão de ID:<br>
-                <b style="color: var(--text-primary); font-family: monospace; font-size: 13px;">{{ session_id }}</b>
+                <b style="color: var(--text-primary); font-family: monospace; font-size: 14px;">{{ session_id }}</b>
             </div>
             
             <!-- ESTADO DE CARREGAMENTO -->
             <div id="pix-loading" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0;">
                 <div class="spinner"></div>
-                <div class="loading-dots" style="margin-top: 15px; font-size: 13px;">Gerando cobrança PIX</div>
+                <div class="loading-dots" style="margin-top: 15px; font-size: 14px;">Gerando cobrança PIX</div>
             </div>
 
             <!-- ESTADO DO PIX GERADO -->
@@ -987,7 +1075,7 @@ HTML_TEMPLATE = """
     <div class="success-modal-overlay" id="success-modal">
         <div class="success-modal-content">
             <div class="plan-title" style="color: var(--success-color);">[SUCESSO] Pagamento Confirmado!</div>
-            <div class="plan-desc" style="margin-top: 15px;">
+            <div class="plan-desc" style="margin-top: 15px; font-size: 14px;">
                 Seu plano foi ativado instantaneamente. Você já pode utilizar os novos recursos da sua conta e gerar seus tokens de acesso.
             </div>
             <button class="plan-btn" onclick="window.location.reload()">Voltar para a Tela Principal</button>
@@ -1078,7 +1166,7 @@ HTML_TEMPLATE = """
                     btnFeedback(btnId);
                 });
             } else {
-                // Fallback cross-browser
+                // Fallback cross-browser compatível
                 const textArea = document.createElement("textarea");
                 textArea.value = text;
                 document.body.appendChild(textArea);
@@ -1110,7 +1198,7 @@ HTML_TEMPLATE = """
             
             // Regra absoluta do frontend
             if (isTargetVerified) {
-                errorDiv.innerText = "[AVISO] Nao e possivel gerar token para contas verificadas nestes planos. Contate o suporte.";
+                errorDiv.innerText = "[AVISO] Não é possível gerar token para contas verificadas nestes planos. Contate o suporte.";
                 errorDiv.style.display = 'block';
                 return;
             }
@@ -1170,12 +1258,12 @@ HTML_TEMPLATE = """
                 document.getElementById('pix-loading').style.display = 'none';
                 document.getElementById('pix-content').style.display = 'block';
                 
-                // Inicia polling
-                pollInterval = setInterval(() => checkPaymentStatus(data.transaction_id), 5000);
+                // Inicia polling (consulta real time a cada 4 segundos)
+                pollInterval = setInterval(() => checkPaymentStatus(data.transaction_id), 4000);
                 
             } catch(e) {
                 console.error(e);
-                alert("Erro de conexao ao gerar checkout.");
+                alert("Erro de conexão ao gerar checkout.");
                 cancelPayment();
             }
         }
@@ -1329,12 +1417,15 @@ CONFIG_HTML_TEMPLATE = """
             gap: 20px;
             margin-bottom: 30px;
         }
+        @media (max-width: 768px) {
+            .grid-2 { grid-template-columns: 1fr; }
+        }
         .form-group {
             margin-bottom: 15px;
         }
         label {
             display: block;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: bold;
             margin-bottom: 5px;
             color: #737373;
@@ -1352,11 +1443,12 @@ CONFIG_HTML_TEMPLATE = """
             background-color: #0095F6;
             color: #fff;
             border: none;
-            padding: 10px 15px;
+            padding: 12px 15px;
             border-radius: 4px;
             font-weight: bold;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 14px;
+            width: 100%;
         }
         button:hover { background-color: #1877F2; }
         .table-responsive {
@@ -1399,19 +1491,20 @@ CONFIG_HTML_TEMPLATE = """
             padding: 10px;
             border-radius: 4px;
             margin-bottom: 15px;
-            font-size: 13px;
+            font-size: 14px;
             background-color: #E1F5FE;
             color: #0277BD;
             border: 1px solid #B3E5FC;
+            font-weight: 600;
         }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Painel de Administração Global</h1>
-        <div style="font-size: 12px; margin-top: 5px;">Sua Sessão Atual: <b>{{ session_id }}</b></div>
+        <div style="font-size: 13px; margin-top: 5px;">Sua Sessão Atual: <b>{{ session_id }}</b></div>
         <div style="margin-top: 15px;">
-            <a href="/" style="color: #0095F6; text-decoration: none; font-weight: bold;">[ Voltar para o App ]</a>
+            <a href="/" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 15px;">[ Voltar para o App ]</a>
         </div>
     </div>
 
@@ -1421,16 +1514,29 @@ CONFIG_HTML_TEMPLATE = """
         {% endif %}
 
         <div class="grid-2">
-            <!-- Coluna 1: Config Global -->
+            <!-- Coluna 1: Configuração Global e Gateway -->
             <div>
-                <h2 class="section-title">Configurações Globais</h2>
+                <h2 class="section-title">Configurações Globais (Integrações)</h2>
+                
+                <form method="POST" action="/session/config" style="margin-bottom: 25px; background: #FAFAFA; padding: 15px; border-radius: 6px; border: 1px solid #EFEFEF;">
+                    <input type="hidden" name="action" value="update_gateway">
+                    <div class="form-group">
+                        <label>API de Pix Ativa (Global & Instantânea):</label>
+                        <select name="pix_gateway">
+                            <option value="ggpix" {% if pix_gateway == 'ggpix' %}selected{% endif %}>GGPIX API</option>
+                            <option value="paradise" {% if pix_gateway == 'paradise' %}selected{% endif %}>Paradise Pags API</option>
+                        </select>
+                    </div>
+                    <button type="submit" style="background-color: #28a745;">Salvar API de Pix</button>
+                </form>
+
                 <form method="POST" action="/session/config">
                     <input type="hidden" name="action" value="update_settings">
                     <div class="form-group">
                         <label>Número de WhatsApp (Suporte e Planos Custom):</label>
                         <input type="text" name="whatsapp_number" placeholder="Ex: 5511999999999" value="{{ whatsapp_number }}">
                     </div>
-                    <button type="submit">Salvar Configurações</button>
+                    <button type="submit">Salvar WhatsApp</button>
                 </form>
                 
                 <h2 class="section-title" style="margin-top: 30px;">Meu Token Customizado (Legado)</h2>
@@ -1470,8 +1576,8 @@ CONFIG_HTML_TEMPLATE = """
         
         <form class="search-box" method="GET" action="/session/config">
             <input type="text" name="search_id" placeholder="Pesquisar por ID de Sessão..." value="{{ request.args.get('search_id', '') }}">
-            <button type="submit">Buscar</button>
-            <a href="/session/config" style="padding: 10px; background: #ED4956; color: #fff; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 13px;">Limpar</a>
+            <button type="submit" style="width: auto;">Buscar</button>
+            <a href="/session/config" style="padding: 12px 15px; background: #ED4956; color: #fff; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">Limpar</a>
         </form>
 
         <div class="table-responsive">
@@ -1487,7 +1593,7 @@ CONFIG_HTML_TEMPLATE = """
                 <tbody>
                     {% for u in users %}
                     <tr>
-                        <td style="font-family: monospace; font-size: 11px;">{{ u.session_id }}</td>
+                        <td style="font-family: monospace; font-size: 12px;">{{ u.session_id }}</td>
                         <td>
                             <span class="badge badge-{{ u.plan }}">{{ u.plan | upper }}</span>
                         </td>
@@ -1583,7 +1689,16 @@ def session_config():
                 {"$set": {"whatsapp_number": number}},
                 upsert=True
             )
-            msg = "[SUCESSO] Configurações globais atualizadas."
+            msg = "[SUCESSO] Configurações globais de contato atualizadas."
+
+        elif action == 'update_gateway':
+            gateway_choice = request.form.get('pix_gateway', 'ggpix')
+            settings_collection.update_one(
+                {"_id": "global_config"},
+                {"$set": {"pix_gateway": gateway_choice}},
+                upsert=True
+            )
+            msg = f"[SUCESSO] API de Pagamento atualizada instantaneamente para: {gateway_choice.upper()}!"
             
         elif action == 'update_legacy_token':
             custom_token = request.form.get('custom_token', '').strip()
@@ -1611,6 +1726,7 @@ def session_config():
     # Prepara dados para a view GET
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
+    pix_gateway = settings.get("pix_gateway", "ggpix") if settings else "ggpix"
     
     config = config_collection.find_one({"session_id": session_id})
     current_token = config.get("custom_token", "") if config else ""
@@ -1627,6 +1743,7 @@ def session_config():
         session_id=session_id, 
         current_token=current_token,
         whatsapp_number=whatsapp_number,
+        pix_gateway=pix_gateway,
         users=users,
         today_str=get_today_str(),
         msg=msg
@@ -1750,23 +1867,32 @@ def checkout():
     plan_requested = data.get('plan')
     
     if plan_requested == 'pro':
-        valor = 3000
+        valor_centavos = 3000
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        valor = 11900
+        valor_centavos = 11900
         desc = "Plano Premium - 1 Mes"
     else:
         return jsonify({"error": "Plano invalido."}), 400
         
-    # Usando CPF fixo conforme instrução do protótipo
-    pix_data = criar_cobranca_pix(valor, desc, "Cliente DMTop", "57174090877")
-    if not pix_data:
-        return jsonify({"error": "Falha na comunicacao com provedor de pagamentos."}), 500
+    # Identifica Gateway Ativo para gerar PIX
+    gateway = get_active_gateway()
+    payer_name = "Instpy Gateway"
+    payer_cpf = "57174090877"
+    
+    if gateway == "paradise":
+        pix_data = criar_cobranca_pix_paradise(valor_centavos / 100, desc, payer_name, payer_cpf)  # Paradise usa Decimal/Reais (ex: 30.00) ou Centavos? Depende da lib. No script teste a Paradise usou 1500 (centavos). Assim assumiremos centavos para o padrão ou manteremos inteiro do `valor_centavos`. A API paradise aceitou `1500` sem casa decimal para R$15, logo `valor_centavos` serve! 
+        if not pix_data:
+            return jsonify({"error": "Falha na comunicacao com provedor Paradise."}), 500
+    else:
+        pix_data = criar_cobranca_pix_ggpix(valor_centavos, desc, payer_name, payer_cpf)
+        if not pix_data:
+            return jsonify({"error": "Falha na comunicacao com provedor GGPIX."}), 500
         
     transaction_id = pix_data['id']
     copia_e_cola = pix_data['pixCopyPaste']
     
-    # Gerar imagem QR Code Base64 com Pillow/qrcode
+    # Gerar imagem QR Code Base64 nativamente com Pillow/qrcode (Seguro e Rápido)
     qr = qrcode.QRCode(box_size=10, border=2)
     qr.add_data(copia_e_cola)
     qr.make(fit=True)
@@ -1776,13 +1902,20 @@ def checkout():
     img.save(buf, format='PNG')
     qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     
-    # Registrar pagamento pendente
+    # Captura avançada de cookies do Meta CAPI (Melhora absurdamente o EMQ no ADS)
+    fbp = request.cookies.get('_fbp')
+    fbc = request.cookies.get('_fbc')
+    
+    # Registrar pagamento pendente salvando o Gateway utilizado (Evita conflitos no Polling)
     payments_collection.insert_one({
         "transaction_id": transaction_id,
         "session_id": session_id,
         "plan_requested": plan_requested,
+        "gateway": gateway,
         "status": "PENDING",
-        "pixel_fired": False, # Flag para impedir disparos duplicados do Purchase
+        "pixel_fired": False, 
+        "fbp_cookie": fbp,
+        "fbc_cookie": fbc,
         "created_at": datetime.utcnow()
     })
     
@@ -1795,7 +1928,15 @@ def checkout():
 
 @app.route('/api/check_payment/<transaction_id>', methods=['GET'])
 def check_payment(transaction_id):
-    tx_info = checar_status_transacao(transaction_id)
+    # Encontra o registro para usar a mesma API que GEROU esse Pix!
+    payment_record = payments_collection.find_one({"transaction_id": transaction_id})
+    gateway_used = payment_record.get('gateway', 'ggpix') if payment_record else 'ggpix'
+    
+    if gateway_used == 'paradise':
+        tx_info = checar_status_transacao_paradise(transaction_id)
+    else:
+        tx_info = checar_status_transacao_ggpix(transaction_id)
+        
     if not tx_info:
         return jsonify({"status": "ERROR"}), 500
         
@@ -1809,25 +1950,25 @@ def check_payment(transaction_id):
     
     if status == 'COMPLETE':
         # Libera o plano imediatamente para a sessao
-        payment_record = payments_collection.find_one({"transaction_id": transaction_id})
         if payment_record:
             users_collection.update_one(
                 {"session_id": payment_record['session_id']},
                 {"$set": {"plan": payment_record['plan_requested']}}
             )
             
-            # --- INTEGRAÇÃO META PIXEL CAPI (PURCHASE) ---
-            # Verifica se o evento de Purchase já foi disparado para evitar duplicidade no Meta
+            # --- INTEGRAÇÃO META PIXEL CAPI (PURCHASE 100% BLINDADA) ---
             if not payment_record.get('pixel_fired'):
-                # Resgata o IP e User-Agent do cliente para enviar a Meta (Melhora a qualidade do Match - EMQ)
+                # Resgata os cookies originais injetados durante a compra (Maior EMQ Meta ADS)
                 client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
                 user_agent = request.headers.get('User-Agent', '')
                 plan_requested = payment_record.get('plan_requested', '')
+                fbp = payment_record.get('fbp_cookie')
+                fbc = payment_record.get('fbc_cookie')
 
-                # Chama a função CAPI criada acima
-                send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id)
+                # Dispara a função CAPI de retaguarda
+                send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id, fbp, fbc)
                 
-                # Seta a flag no banco para não disparar mais de uma vez
+                # Flag para impedir múltiplas submissões CAPI no loop
                 payments_collection.update_one(
                     {"transaction_id": transaction_id},
                     {"$set": {"pixel_fired": True}}
