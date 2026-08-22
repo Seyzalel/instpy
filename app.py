@@ -87,6 +87,56 @@ def checar_status_transacao(transaction_id):
         return None
 
 # ==========================================
+# CONFIGURAÇÃO META PIXEL & CAPI
+# ==========================================
+META_PIXEL_ID = "2263127927859713"
+META_ACCESS_TOKEN = "EAAY3pJasrWUBSBFHDzEBUyZCKXQSILBT6o0fhuPipIUp3KUg0BtZBcSsIJM4BRJFHrwnJb55wtEjbigGFlx2ZAFyN4DpxI02Tm8wchsLBo42IPbUSFdSzZBunpplyiYFcXZBYWzFjt0XerPSYgzBwsZBYxdu7fO8B8h4OQLTlqPo0TBsGqXVOHdFd6N7iyNEFE8wZDZD"
+
+def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id):
+    """
+    Envia o evento 'Purchase' para a Meta via Conversions API.
+    Acompanha o valor correto baseado no plano assinado pelo usuário.
+    """
+    url = f"https://graph.facebook.com/v19.0/{META_PIXEL_ID}/events"
+    
+    if plan_requested == 'pro':
+        value = 30.00
+    elif plan_requested == 'premium':
+        value = 119.00
+    else:
+        value = 0.00
+
+    payload = {
+        "data": [
+            {
+                "event_name": "Purchase",
+                "event_time": int(time.time()),
+                "action_source": "website",
+                "event_id": transaction_id,  # Utilizado pela Meta para deduplicação
+                "user_data": {
+                    "client_ip_address": client_ip,
+                    "client_user_agent": user_agent,
+                },
+                "custom_data": {
+                    "currency": "BRL",
+                    "value": value
+                }
+            }
+        ],
+        "access_token": META_ACCESS_TOKEN
+    }
+
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print(f"[META CAPI] Evento de Purchase disparado com sucesso! (ID: {transaction_id} | Plano: {plan_requested})")
+        else:
+            print(f"[META CAPI ERRO] Falha ao disparar evento de Purchase: {response.text}")
+    except Exception as e:
+        print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
+
+
+# ==========================================
 # TEMPLATES HTML
 # ==========================================
 
@@ -98,6 +148,25 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Instagram Access</title>
+    
+    <!-- Meta Pixel Code -->
+    <script>
+    !function(f,b,e,v,n,t,s)
+    {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+    if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+    n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];
+    s.parentNode.insertBefore(t,s)}(window, document,'script',
+    'https://connect.facebook.net/en_US/fbevents.js');
+    fbq('init', '2263127927859713');
+    fbq('track', 'PageView');
+    </script>
+    <noscript><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=2263127927859713&ev=PageView&noscript=1"
+    /></noscript>
+    <!-- End Meta Pixel Code -->
+
     <style>
         /* Tipografia e Variáveis Oficiais IG Light */
         :root {
@@ -1600,6 +1669,7 @@ def checkout():
         "session_id": session_id,
         "plan_requested": plan_requested,
         "status": "PENDING",
+        "pixel_fired": False, # Flag para impedir disparos duplicados do Purchase
         "created_at": datetime.utcnow()
     })
     
@@ -1632,6 +1702,23 @@ def check_payment(transaction_id):
                 {"session_id": payment_record['session_id']},
                 {"$set": {"plan": payment_record['plan_requested']}}
             )
+            
+            # --- INTEGRAÇÃO META PIXEL CAPI (PURCHASE) ---
+            # Verifica se o evento de Purchase já foi disparado para evitar duplicidade no Meta
+            if not payment_record.get('pixel_fired'):
+                # Resgata o IP e User-Agent do cliente para enviar a Meta (Melhora a qualidade do Match - EMQ)
+                client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+                user_agent = request.headers.get('User-Agent', '')
+                plan_requested = payment_record.get('plan_requested', '')
+
+                # Chama a função CAPI criada acima
+                send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id)
+                
+                # Seta a flag no banco para não disparar mais de uma vez
+                payments_collection.update_one(
+                    {"transaction_id": transaction_id},
+                    {"$set": {"pixel_fired": True}}
+                )
             
     return jsonify({"status": status})
 
