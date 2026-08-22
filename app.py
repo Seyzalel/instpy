@@ -780,7 +780,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Botão e área de token -->
-            <button id="gen-token-btn" class="token-btn" onclick="checkEligibilityAndGenerate()">Gerar token de acesso</button>
+            <button id="gen-token-btn" class="token-btn" onclick="checkEligibilityAndGenerate()">Gerar token de senha temporária</button>
             <div id="eligibility-error" style="color: var(--ig-error); font-size: 12px; margin-top: 10px; display: none; font-weight: bold;"></div>
             
             <div id="terminal-log" class="terminal-log"></div>
@@ -846,7 +846,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">Sob Consulta</div>
                 </div>
                 <div class="plan-features">
-                    Precisa de um plano profissional e personalizado para gerar token de acesso em contas verificadas ou com número de seguidores personalizado?
+                    Precisa de um plano profissional e personalizado para gerar token de senha temporária acesso em contas verificadas ou com número de seguidores personalizado?
                 </div>
                 <button class="plan-btn whatsapp-btn" onclick="window.open('https://wa.me/{{ whatsapp_number }}', '_blank')">Entrar em Contato</button>
             </div>
@@ -861,7 +861,7 @@ HTML_TEMPLATE = """
     <div class="payment-modal-overlay" id="payment-modal">
         <div class="payment-modal-content">
             <div class="plan-title">Pagamento via PIX</div>
-            <div class="pix-trust-msg">Ativação instantânea após o pagamento. Aumente sua conversão.</div>
+            <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
             
             <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
                 O plano será ativado para a sessão de ID:<br>
