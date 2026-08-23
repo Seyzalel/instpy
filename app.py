@@ -259,9 +259,9 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
-        value = 30.00
+        value = 17.00
     elif plan_requested == 'premium':
-        value = 119.00
+        value = 60.00
     else:
         value = 0.00
 
@@ -342,7 +342,6 @@ HTML_TEMPLATE = """
             --ig-error: #ED4956;
             --input-bg: #EFEFEF;
             --border-color: #DBDBDB;
-            --success-color: #28a745;
         }
 
         * {
@@ -874,51 +873,126 @@ HTML_TEMPLATE = """
             border: 1px solid var(--border-color);
         }
 
-        /* Checkout Pix */
+        /* Checkout Pix Modernizado */
         .pix-qr-container {
-            margin: 15px 0;
-            display: flex;
-            justify-content: center;
+            margin: 20px auto;
+            padding: 18px;
+            background: linear-gradient(145deg, #ffffff, #f0f0f0);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.8);
+            display: inline-block;
+            border: 1px solid #EFEFEF;
         }
         .pix-qr {
-            width: 180px;
-            height: 180px;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 5px;
+            width: 190px;
+            height: 190px;
+            border-radius: 12px;
+            display: block;
         }
+        
         .pix-copy-area {
-            background-color: var(--input-bg);
-            padding: 10px;
-            border-radius: 6px;
-            margin-bottom: 15px;
+            background-color: var(--bg-white);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 25px;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+        }
+        .pix-hash-container {
+            padding: 14px 16px;
+            background-color: #FAFAFA;
+            border-bottom: 1px solid var(--border-color);
         }
         .pix-hash {
-            font-family: monospace;
-            font-size: 11px;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 13px;
             word-break: break-all;
             color: var(--text-primary);
             text-align: left;
-            max-height: 40px;
+            max-height: 48px;
             overflow: hidden;
-        }
-        .pix-timer {
-            font-size: 12px;
-            color: var(--ig-error);
-            font-weight: 600;
-            margin-bottom: 15px;
-        }
-        .pix-trust-msg {
-            font-size: 13px;
-            color: var(--success-color);
-            font-weight: 600;
-            margin-bottom: 15px;
+            line-height: 1.4;
         }
         
-        /* Animacao minimalista */
+        .pix-copy-action {
+            padding: 12px;
+            background-color: var(--bg-white);
+        }
+        #pix-copy-btn {
+            width: 100%;
+            padding: 14px;
+            font-size: 14px;
+            border-radius: 8px;
+            background-color: var(--ig-blue);
+            color: white;
+            font-weight: 600;
+            transition: background 0.2s;
+            border: none;
+            cursor: pointer;
+        }
+        #pix-copy-btn:hover { background-color: var(--ig-blue-hover); }
+
+        .pix-timer {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-bottom: 20px;
+        }
+        
+        .pix-trust-msg {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        /* Modern Yellow Waiting Badge */
+        .waiting-payment-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #FFDE00; /* Instagram/Modern Yellow */
+            color: #111;
+            padding: 12px 20px;
+            border-radius: 30px;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(255, 222, 0, 0.4);
+            animation: pulse-yellow 2s infinite;
+            margin: 10px 0 15px 0;
+        }
+        @keyframes pulse-yellow {
+            0% { box-shadow: 0 0 0 0 rgba(255, 222, 0, 0.6); }
+            70% { box-shadow: 0 0 0 12px rgba(255, 222, 0, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 222, 0, 0); }
+        }
+        .waiting-spinner {
+            border: 2px solid rgba(0,0,0,0.1);
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border-left-color: #111;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        /* Spinner Animado Original (Usado na etapa de Loading Geral) */
+        .spinner {
+            border: 3px solid rgba(0,0,0,0.1);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border-left-color: var(--ig-blue);
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Animacao minimalista de pontos (Mantida para Loading Geral) */
         .loading-dots {
             display: inline-block;
             margin-top: 10px;
@@ -935,20 +1009,6 @@ HTML_TEMPLATE = """
             40% { color: var(--text-secondary); text-shadow: .25em 0 0 rgba(0,0,0,0), .5em 0 0 rgba(0,0,0,0);}
             60% { text-shadow: .25em 0 0 var(--text-secondary), .5em 0 0 rgba(0,0,0,0);}
             80%, 100% { text-shadow: .25em 0 0 var(--text-secondary), .5em 0 0 var(--text-secondary);}
-        }
-
-        /* Spinner Animado */
-        .spinner {
-            border: 3px solid rgba(0,0,0,0.1);
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            border-left-color: var(--ig-blue);
-            animation: spin 1s ease infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -1049,12 +1109,12 @@ HTML_TEMPLATE = """
             <div class="plan-card">
                 <div class="plan-card-header">
                     <div class="plan-name">Plano Pro</div>
-                    <div class="plan-price">R$ 30,00/mês</div>
+                    <div class="plan-price">R$ 17,00/mês</div>
                 </div>
                 <div class="plan-features">
                     - Gera até 5 tokens de senha por dia.<br>
                     - Acesso a contas de até 5.000 seguidores.<br>
-                    - Equivalente a R$ 1,00 por dia.
+                    - Equivalente a menos de R$ 1,00 por dia.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('pro')">Atualizar para Pro</button>
             </div>
@@ -1062,7 +1122,7 @@ HTML_TEMPLATE = """
             <div class="plan-card">
                 <div class="plan-card-header">
                     <div class="plan-name">Plano Premium</div>
-                    <div class="plan-price">R$ 119,00/mês</div>
+                    <div class="plan-price">R$ 60,00/mês</div>
                 </div>
                 <div class="plan-features">
                     - Gera até 15 tokens de senha por dia.<br>
@@ -1101,7 +1161,7 @@ HTML_TEMPLATE = """
                 <input type="tel" id="user-cpf" class="cpf-input" placeholder="Digite seu CPF (Somente números)" maxlength="14" autocomplete="off">
                 
                 <div class="privacy-notice">
-                    🔒 <b>Privacidade e Segurança:</b> Seu CPF é utilizado estritamente para o processamento e aprovação do pagamento. Nós <b>não armazenamos</b> este dado em nossos servidores, garantindo total sigilo e proteção da sua identidade.
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: text-bottom; margin-right: 4px; color: var(--text-secondary);"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> <b>Privacidade e Segurança:</b> Seu CPF é utilizado estritamente para o processamento e aprovação do pagamento. Nós <b>não armazenamos</b> este dado em nossos servidores, garantindo total sigilo e proteção da sua identidade.
                 </div>
                 
                 <button class="plan-btn" style="padding: 14px; font-size: 15px;" onclick="processCheckout()">Gerar PIX Agora</button>
@@ -1115,10 +1175,10 @@ HTML_TEMPLATE = """
 
             <!-- Etapa 3: Exibição do QR Code PIX -->
             <div id="pix-content" style="display: none; width: 100%;">
-                <div class="plan-title" style="font-size: 18px; margin-bottom: 5px;">Pagamento via PIX</div>
+                <div class="plan-title" style="font-size: 20px; margin-bottom: 8px;">Pagamento via PIX</div>
                 <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
                 
-                <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
+                <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
                     O plano será ativado para a sessão:<br>
                     <b style="color: var(--text-primary); font-family: monospace; font-size: 14px;">{{ session_id }}</b>
                 </div>
@@ -1128,12 +1188,20 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <div class="pix-copy-area">
-                    <div class="pix-hash" id="pix-hash-text"></div>
-                    <button class="copy-btn" id="pix-copy-btn" style="width: 100%; margin-top: 10px; padding: 12px; font-size: 14px;" onclick="copyPix()">Copiar Código PIX</button>
+                    <div class="pix-hash-container">
+                        <div class="pix-hash" id="pix-hash-text"></div>
+                    </div>
+                    <div class="pix-copy-action">
+                        <button id="pix-copy-btn" onclick="copyPix()">Copiar Código PIX</button>
+                    </div>
                 </div>
                 
-                <div class="pix-timer">O pagamento expira em 5 minutos.</div>
-                <div class="loading-dots" style="font-size: 14px;">Aguardando confirmação do banco</div>
+                <div class="waiting-payment-badge">
+                    <div class="waiting-spinner"></div>
+                    Aguardando confirmação do banco...
+                </div>
+                
+                <div class="pix-timer">O código expira em 5 minutos.</div>
             </div>
 
         </div>
@@ -1142,7 +1210,7 @@ HTML_TEMPLATE = """
     <!-- Modal de Sucesso -->
     <div class="success-modal-overlay" id="success-modal">
         <div class="success-modal-content">
-            <div class="plan-title" style="color: var(--success-color);">[SUCESSO] Pagamento Confirmado!</div>
+            <div class="plan-title" style="color: #28a745;">[SUCESSO] Pagamento Confirmado!</div>
             <div class="plan-desc" style="margin-top: 15px; font-size: 14px;">
                 Seu plano foi ativado instantaneamente. Você já pode utilizar os novos recursos da sua conta e gerar seus tokens de acesso.
             </div>
@@ -1305,7 +1373,7 @@ HTML_TEMPLATE = """
 
         async function processCheckout() {
             // Limpa o CPF deixando apenas números
-            const cpfInput = document.getElementById('user-cpf').value.replace(/\\D/g, '');
+            const cpfInput = document.getElementById('user-cpf').value.replace(/\D/g, '');
             
             if (cpfInput.length !== 11 && cpfInput.length !== 14) {
                 alert("Por favor, insira um CPF ou CNPJ válido contendo 11 ou 14 números.");
@@ -1951,10 +2019,10 @@ def checkout():
          return jsonify({"error": "CPF/CNPJ inválido."}), 400
     
     if plan_requested == 'pro':
-        valor_centavos = 3000
+        valor_centavos = 1700
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        valor_centavos = 11900
+        valor_centavos = 6000
         desc = "Plano Premium - 1 Mes"
     else:
         return jsonify({"error": "Plano invalido."}), 400
