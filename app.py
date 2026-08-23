@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort
+from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
 from instagrapi import Client
 from pymongo import MongoClient
 import re
@@ -924,9 +924,17 @@ HTML_TEMPLATE = """
             <p class="explanation-text">
                 <b>Para iniciantes:</b> Nosso sistema cria uma porta temporária. Ele gera um código único (o token) e engana o sistema do Instagram por alguns segundos, fazendo ele acreditar que esse código é a verdadeira senha do usuário. Como a segurança deles é muito avançada, eles percebem a invasão e fecham essa porta rapidamente. É por isso que o token só funciona uma única vez e expira em cerca de 1 minuto.
             </p>
-            <p class="explanation-text" style="margin-bottom: 0;">
+            <p class="explanation-text" style="margin-bottom: 15px;">
                 <b>Para especialistas:</b> O script atua interceptando o handshake de validação e injeta um payload forjado diretamente no fluxo de autenticação OAuth. Nós calculamos uma colisão no hash de sessão em memória, forçando os nós de cache do servidor a reconhecerem o token gerado como uma chave de acesso válida. Devido à extrema volatilidade dessa inserção, o token injetado sofre invalidação (drop) em aproximadamente 60 segundos ou no processamento do POST.
             </p>
+            
+            <!-- VÍDEO TUTORIAL ADICIONADO AQUI CONFORME EXIGIDO -->
+            <div style="width: 100%; border-radius: 8px; overflow: hidden; margin-top: 15px; border: 1px solid var(--border-color); background-color: #000;">
+                <video width="100%" controls playsinline preload="metadata" poster="/tutorial/thumbnail.PNG" style="display: block;">
+                    <source src="/tutorial/instpy_tutorial.mp4" type="video/mp4">
+                    Seu navegador não suporta a tag de vídeo.
+                </video>
+            </div>
         </div>
     </div>
 
@@ -1616,6 +1624,14 @@ CONFIG_HTML_TEMPLATE = """
 # ==========================================
 # ROTAS DO BACKEND
 # ==========================================
+
+# Meticulosamente configurado para expor a pasta "tutorial" da raiz
+@app.route('/tutorial/<path:filename>')
+def serve_tutorial(filename):
+    # Encontra o caminho absoluto do diretório raiz onde o script está rodando
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    tutorial_dir = os.path.join(base_dir, 'tutorial')
+    return send_from_directory(tutorial_dir, filename)
 
 def get_today_str():
     return datetime.utcnow().strftime('%Y-%m-%d')
