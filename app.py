@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 from instagrapi import Client
 from pymongo import MongoClient
 import re
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta
 from urllib.parse import unquote
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ==========================================
 # CONFIGURAÇÃO DO MONGODB
@@ -47,13 +49,13 @@ MEMORY_CACHE = {}
 # SISTEMA DE PROTEÇÃO ANTI-BOT E FIREWALL
 # ==========================================
 IP_HISTORY = defaultdict(list)
-RATE_LIMIT_MAX_REQ = 100
+RATE_LIMIT_MAX_REQ = 120
 RATE_LIMIT_WINDOW = 60
 BANNED_IPS = set()
 IP_BANS = {}
 BAN_TIME = 600
 SUSPICIOUS_UA_REGEX = re.compile(
-    r'(bot|spider|crawler|scraper|curl|wget|python|urllib|libwww|httpclient|java|php|postman|insomnia|'
+    r'(spider|crawler|scraper|wget|urllib|libwww|httpclient|'
     r'headless|phantom|selenium|puppeteer|playwright|cypress|slurp|yahoo|yandex|baidu|teoma|alexa|'
     r'nikto|nmap|sqlmap|mechanize|scrapy|zgrab|nucleus|httpx|masscan)',
     re.IGNORECASE
@@ -61,6 +63,10 @@ SUSPICIOUS_UA_REGEX = re.compile(
 
 @app.before_request
 def bot_firewall():
+    # NUNCA bloquear requisições de Webhook das adquirentes/gateways
+    if request.path.startswith('/api/webhook'):
+        return
+
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     if client_ip:
         client_ip = client_ip.split(',')[0].strip()
@@ -152,31 +158,37 @@ GGPIX_HEADERS = {
     "X-API-Key": GGPIX_API_KEY
 }
 
-def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagador):
+def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
     url = f"{GGPIX_BASE_URL}/pix/in"
     external_id = f"DMReporting-{uuid.uuid4().hex[:8]}"
     payload = {
         "amountCents": valor_centavos,
         "description": descricao,
         "payerName": nome_pagador,
-        "payerDocument": cpf_pagador, # CPF REAL DO USUÁRIO
+        "payerDocument": cpf_pagador,
         "externalId": external_id
     }
+    if webhook_url:
+        payload["webhookUrl"] = webhook_url
+    if tracking:
+        payload["tracking"] = tracking
+
     try:
-        response = requests.post(url, headers=GGPIX_HEADERS, json=payload)
+        response = requests.post(url, headers=GGPIX_HEADERS, json=payload, timeout=12)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.HTTPError as err:
-        print(f"Erro ao gerar PIX (GGPIX): {err} - Response: {response.text if 'response' in locals() else ''}")
+    except requests.exceptions.RequestException as err:
+        resp_text = response.text if 'response' in locals() and response is not None else ''
+        print(f"Erro ao gerar PIX (GGPIX): {err} - Response: {resp_text}")
         return None
 
 def checar_status_transacao_ggpix(transaction_id):
     url = f"{GGPIX_BASE_URL}/transactions/{transaction_id}"
     try:
-        response = requests.get(url, headers=GGPIX_HEADERS)
+        response = requests.get(url, headers=GGPIX_HEADERS, timeout=8)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.HTTPError as err:
+    except requests.exceptions.RequestException as err:
         print(f"Erro ao checar status PIX (GGPIX): {err}")
         return None
 
@@ -201,11 +213,11 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
             "name": nome_pagador,
             "email": "suporte@instpygateway.com",
             "phone": "11999999999",
-            "document": cpf_pagador # CPF REAL DO USUÁRIO
+            "document": cpf_pagador
         }
     }
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=12)
         response.raise_for_status()
         transaction_data = response.json()
         
@@ -217,7 +229,7 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
         else:
             print(f"Erro Paradise API: Retorno não foi success. Response: {transaction_data}")
             return None
-    except requests.exceptions.HTTPError as e:
+    except requests.exceptions.RequestException as e:
         print(f"Falha critica (Paradise): {e}")
         return None
 
@@ -225,7 +237,7 @@ def checar_status_transacao_paradise(transaction_id):
     url = f"{PARADISE_BASE_URL}/query.php?action=get_transaction&id={transaction_id}"
     headers = {"X-API-Key": PARADISE_API_KEY}
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=8)
         response.raise_for_status()
         status_data = response.json()
         
@@ -291,7 +303,7 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     }
 
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=8)
         if response.status_code == 200:
             print(f"[META CAPI] Evento de Purchase disparado com absoluto sucesso! (ID: {transaction_id} | Plano: {plan_requested})")
         else:
@@ -299,9 +311,8 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     except Exception as e:
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
-
 # ==========================================
-# TEMPLATES HTML (INTACTOS E APERFEIÇOADOS)
+# TEMPLATES HTML
 # ==========================================
 
 HTML_TEMPLATE = """
@@ -331,7 +342,6 @@ HTML_TEMPLATE = """
     <!-- End Meta Pixel Code -->
 
     <style>
-        /* Tipografia e Variáveis Oficiais IG Light */
         :root {
             --bg-body: #FAFAFA;
             --bg-white: #FFFFFF;
@@ -352,7 +362,6 @@ HTML_TEMPLATE = """
             -webkit-font-smoothing: antialiased;
         }
 
-        /* 100dvh e min-height previnem bugs graves em WebView/InApp */
         body {
             background-color: var(--bg-body);
             color: var(--text-primary);
@@ -367,7 +376,6 @@ HTML_TEMPLATE = """
             padding-bottom: 40px;
         }
 
-        /* Toolbar para ID de Sessão Permanente */
         .toolbar {
             position: fixed;
             top: 0;
@@ -409,7 +417,6 @@ HTML_TEMPLATE = """
             border: none;
             padding: 12px 14px;
             border-radius: 4px;
-            /* CRÍTICO PARA WEBVIEW/iOS: Fonte < 16px causa Zoom de foco indesejado no mobile */
             font-size: 16px !important; 
             color: var(--text-primary);
             margin-bottom: 16px;
@@ -459,7 +466,6 @@ HTML_TEMPLATE = """
             font-weight: 400;
         }
 
-        /* CAIXA DE EXPLICAÇÃO DA INJEÇÃO */
         .explanation-box {
             margin-top: 40px;
             padding: 20px;
@@ -488,7 +494,6 @@ HTML_TEMPLATE = """
             color: var(--text-primary);
         }
 
-        /* Modal / View */
         .modal-overlay, .upgrade-modal-overlay, .success-modal-overlay {
             display: none;
             position: fixed;
@@ -524,10 +529,9 @@ HTML_TEMPLATE = """
             position: relative;
         }
 
-        /* Novo visual do Modal de Pagamento: Tela Cheia e Limpa */
         #payment-modal {
             z-index: 1005;
-            background-color: var(--bg-body); /* Fundo claro e limpo */
+            background-color: var(--bg-body);
         }
         .payment-view {
             display: flex;
@@ -770,7 +774,6 @@ HTML_TEMPLATE = """
             line-height: 1.4;
         }
 
-        /* Estilos dos Planos */
         .plan-title {
             font-size: 16px;
             font-weight: bold;
@@ -843,7 +846,6 @@ HTML_TEMPLATE = """
             background-color: #128C7E;
         }
 
-        /* Elementos de Checkout e CPF */
         .cpf-input {
             width: 100%;
             background-color: var(--bg-white);
@@ -873,7 +875,6 @@ HTML_TEMPLATE = """
             border: 1px solid var(--border-color);
         }
 
-        /* Checkout Pix Modernizado */
         .pix-qr-container {
             margin: 20px auto;
             padding: 18px;
@@ -948,12 +949,11 @@ HTML_TEMPLATE = """
             margin-bottom: 10px;
         }
         
-        /* Modern Yellow Waiting Badge */
         .waiting-payment-badge {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            background-color: #FFDE00; /* Instagram/Modern Yellow */
+            background-color: #FFDE00;
             color: #111;
             padding: 12px 20px;
             border-radius: 30px;
@@ -978,7 +978,6 @@ HTML_TEMPLATE = """
             margin-right: 10px;
         }
 
-        /* Spinner Animado Original (Usado na etapa de Loading Geral) */
         .spinner {
             border: 3px solid rgba(0,0,0,0.1);
             width: 40px;
@@ -992,7 +991,6 @@ HTML_TEMPLATE = """
             100% { transform: rotate(360deg); }
         }
         
-        /* Animacao minimalista de pontos (Mantida para Loading Geral) */
         .loading-dots {
             display: inline-block;
             margin-top: 10px;
@@ -1201,7 +1199,7 @@ HTML_TEMPLATE = """
                     Aguardando confirmação do banco...
                 </div>
                 
-                <div class="pix-timer">O código expira em 5 minutos.</div>
+                <div class="pix-timer">O código expira em 15 minutos.</div>
             </div>
 
         </div>
@@ -1225,6 +1223,14 @@ HTML_TEMPLATE = """
         let isTargetVerified = false;
         let pollInterval = null;
         let selectedPlan = "";
+        let currentActiveTxId = null;
+
+        // Listener de visibilidade: se o usuário voltar do banco para a aba, verifica instantaneamente!
+        document.addEventListener("visibilitychange", function() {
+            if (document.visibilityState === "visible" && currentActiveTxId) {
+                checkPaymentStatus(currentActiveTxId);
+            }
+        });
 
         async function fetchData() {
             const inputVal = document.getElementById('target-input').value.trim();
@@ -1311,7 +1317,7 @@ HTML_TEMPLATE = """
                     document.execCommand('copy');
                     btnFeedback(btnId);
                 } catch (err) {
-                    console.error('Fallback: Oops, unable to copy', err);
+                    console.error('Fallback: unable to copy', err);
                 }
                 document.body.removeChild(textArea);
             }
@@ -1320,7 +1326,7 @@ HTML_TEMPLATE = """
         function btnFeedback(btnId) {
             const btn = document.getElementById(btnId);
             const originalText = btn.innerText;
-            btn.innerText = "Copiado!";
+            btn.innerText = "Copiado com Sucesso!";
             setTimeout(() => { btn.innerText = originalText; }, 2000);
         }
 
@@ -1364,7 +1370,6 @@ HTML_TEMPLATE = """
             document.getElementById('upgrade-modal').style.display = 'none';
             document.getElementById('payment-modal').style.display = 'flex';
             
-            // Reseta a view para a etapa 1 (CPF)
             document.getElementById('cpf-step').style.display = 'block';
             document.getElementById('pix-loading').style.display = 'none';
             document.getElementById('pix-content').style.display = 'none';
@@ -1372,7 +1377,6 @@ HTML_TEMPLATE = """
         }
 
         async function processCheckout() {
-            // Limpa o CPF deixando apenas números
             const cpfInput = document.getElementById('user-cpf').value.replace(/\D/g, '');
             
             if (cpfInput.length !== 11 && cpfInput.length !== 14) {
@@ -1380,7 +1384,6 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            // Transição para a tela de carregamento
             document.getElementById('cpf-step').style.display = 'none';
             document.getElementById('pix-loading').style.display = 'flex';
 
@@ -1398,16 +1401,16 @@ HTML_TEMPLATE = """
                     return;
                 }
                 
-                // Preenche os dados recebidos na View
+                currentActiveTxId = data.transaction_id;
+
                 document.getElementById('pix-qr-img').src = "data:image/png;base64," + data.qr_base64;
                 document.getElementById('pix-hash-text').innerText = data.pix_copy_paste;
                 
-                // Transição suave para o Pix gerado
                 document.getElementById('pix-loading').style.display = 'none';
                 document.getElementById('pix-content').style.display = 'block';
                 
-                // Inicia polling (consulta real time a cada 4 segundos)
-                pollInterval = setInterval(() => checkPaymentStatus(data.transaction_id), 4000);
+                if (pollInterval) clearInterval(pollInterval);
+                pollInterval = setInterval(() => checkPaymentStatus(data.transaction_id), 3500);
                 
             } catch(e) {
                 console.error(e);
@@ -1417,17 +1420,20 @@ HTML_TEMPLATE = """
         }
 
         async function checkPaymentStatus(transactionId) {
+            if (!transactionId) return;
             try {
                 const res = await fetch(`/api/check_payment/${transactionId}`);
                 const data = await res.json();
                 
                 if (data.status === 'COMPLETE') {
                     clearInterval(pollInterval);
+                    currentActiveTxId = null;
                     document.getElementById('payment-modal').style.display = 'none';
                     document.getElementById('success-modal').style.display = 'flex';
                 } else if (data.status === 'FAILED' || data.status === 'CANCELED') {
                     clearInterval(pollInterval);
-                    alert("O pagamento falhou ou foi cancelado.");
+                    currentActiveTxId = null;
+                    alert("O pagamento falhou ou expirou.");
                     cancelPayment();
                 }
             } catch (e) {
@@ -1437,6 +1443,7 @@ HTML_TEMPLATE = """
 
         function cancelPayment() {
             if(pollInterval) clearInterval(pollInterval);
+            currentActiveTxId = null;
             document.getElementById('payment-modal').style.display = 'none';
         }
 
@@ -1520,7 +1527,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# 2. Frontend de Configuração da Sessão (ADMIN PANEL)
+# Frontend de Configuração da Sessão (ADMIN PANEL)
 CONFIG_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -1765,7 +1772,6 @@ CONFIG_HTML_TEMPLATE = """
 # ROTAS DO BACKEND
 # ==========================================
 
-# Meticulosamente configurado para expor a pasta "tutorial" da raiz
 @app.route('/tutorial/<path:filename>')
 def serve_tutorial(filename):
     base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -1976,7 +1982,6 @@ def get_target_info():
             pass
         return jsonify({"error": "Usuário não encontrado ou protegido por privacidade."}), 404
 
-
 @app.route('/api/check_eligibility', methods=['GET'])
 def check_eligibility():
     session_id = request.cookies.get('user_session_id')
@@ -2002,18 +2007,16 @@ def check_eligibility():
         "can_generate": can_generate
     })
 
-
 @app.route('/api/checkout', methods=['POST'])
 def checkout():
     session_id = request.cookies.get('user_session_id')
-    data = request.json
+    data = request.json or {}
     plan_requested = data.get('plan')
     user_cpf = data.get('cpf')
     
     if not user_cpf:
         return jsonify({"error": "O CPF é obrigatório para gerar o pagamento."}), 400
         
-    # Limpa o CPF garantindo apenas números
     user_cpf = re.sub(r'[^0-9]', '', user_cpf)
     if len(user_cpf) != 11 and len(user_cpf) != 14:
          return jsonify({"error": "CPF/CNPJ inválido."}), 400
@@ -2028,17 +2031,40 @@ def checkout():
         return jsonify({"error": "Plano invalido."}), 400
         
     gateway = get_active_gateway()
-    payer_name = "Instpy Gateway"
-    payer_cpf = user_cpf # CPF REAL DO USUÁRIO INSERIDO NA TELA
+    payer_name = f"Cliente {user_cpf[:3]}" # Formato neutro seguro que evita recusa de SPI
+    payer_cpf = user_cpf
+    
+    # Extrai dados do cliente e tracking
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    user_agent = request.headers.get('User-Agent', '')
+    fbp = request.cookies.get('_fbp')
+    fbc = request.cookies.get('_fbc')
+
+    # Configura Webhook URL dinâmico
+    host_url = request.host_url.rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/pix"
+    
+    tracking_payload = {
+        "client_ip": client_ip,
+        "client_user_agent": user_agent,
+        "src": "checkout-direct"
+    }
     
     if gateway == "paradise":
         pix_data = criar_cobranca_pix_paradise(valor_centavos, desc, payer_name, payer_cpf)
         if not pix_data:
-            return jsonify({"error": "Falha na comunicacao com provedor Paradise."}), 500
+            return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
     else:
-        pix_data = criar_cobranca_pix_ggpix(valor_centavos, desc, payer_name, payer_cpf)
+        pix_data = criar_cobranca_pix_ggpix(
+            valor_centavos, 
+            desc, 
+            payer_name, 
+            payer_cpf, 
+            webhook_url=webhook_url, 
+            tracking=tracking_payload
+        )
         if not pix_data:
-            return jsonify({"error": "Falha na comunicacao com provedor GGPIX."}), 500
+            return jsonify({"error": "Falha na comunicação com provedor GGPIX."}), 500
         
     transaction_id = pix_data['id']
     copia_e_cola = pix_data['pixCopyPaste']
@@ -2052,16 +2078,16 @@ def checkout():
     img.save(buf, format='PNG')
     qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     
-    fbp = request.cookies.get('_fbp')
-    fbc = request.cookies.get('_fbc')
-    
     payments_collection.insert_one({
         "transaction_id": transaction_id,
+        "externalId": pix_data.get('externalId'),
         "session_id": session_id,
         "plan_requested": plan_requested,
         "gateway": gateway,
         "status": "PENDING",
         "pixel_fired": False, 
+        "client_ip": client_ip,
+        "user_agent": user_agent,
         "fbp_cookie": fbp,
         "fbc_cookie": fbc,
         "created_at": datetime.utcnow()
@@ -2073,10 +2099,74 @@ def checkout():
         "qr_base64": qr_b64
     })
 
+# ==========================================
+# ENDPOINT DE WEBHOOK EM TEMPO REAL (GGPIX & PARADISE)
+# ==========================================
+@app.route('/api/webhook/pix', methods=['POST'])
+@app.route('/api/webhook/ggpix', methods=['POST'])
+def webhook_pix_handler():
+    try:
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"status": "ignored", "error": "No JSON payload"}), 400
+
+        print(f"[WEBHOOK RECEBIDO] Dados: {data}")
+        
+        transaction_id = data.get("transactionId") or data.get("id")
+        status = data.get("status")
+        external_id = data.get("externalId")
+
+        if not transaction_id and not external_id:
+            return jsonify({"status": "ignored", "error": "ID ausente"}), 400
+
+        payment_record = None
+        if transaction_id:
+            payment_record = payments_collection.find_one({"transaction_id": transaction_id})
+        if not payment_record and external_id:
+            payment_record = payments_collection.find_one({"externalId": external_id})
+
+        if payment_record:
+            payments_collection.update_one(
+                {"_id": payment_record["_id"]},
+                {"$set": {"status": status, "updated_at": datetime.utcnow()}}
+            )
+
+            if status in ["COMPLETE", "approved", "PAID"]:
+                # Ativa o plano do usuário
+                users_collection.update_one(
+                    {"session_id": payment_record['session_id']},
+                    {"$set": {"plan": payment_record['plan_requested']}}
+                )
+
+                # Dispara Meta CAPI
+                if not payment_record.get('pixel_fired'):
+                    client_ip = payment_record.get('client_ip', '0.0.0.0')
+                    user_agent = payment_record.get('user_agent', 'Webhook/Adquirente')
+                    plan_requested = payment_record.get('plan_requested', '')
+                    fbp = payment_record.get('fbp_cookie')
+                    fbc = payment_record.get('fbc_cookie')
+
+                    send_meta_purchase_event(plan_requested, client_ip, user_agent, payment_record.get('transaction_id'), fbp, fbc)
+
+                    payments_collection.update_one(
+                        {"_id": payment_record["_id"]},
+                        {"$set": {"pixel_fired": True}}
+                    )
+
+        return jsonify({"status": "success", "processed": True}), 200
+
+    except Exception as e:
+        print(f"[WEBHOOK ERRO CRÍTICO] {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/check_payment/<transaction_id>', methods=['GET'])
 def check_payment(transaction_id):
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
+    
+    # OTIMIZAÇÃO: Se já aprovado no MongoDB via Webhook, responde imediatamente!
+    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID"]:
+        return jsonify({"status": "COMPLETE"})
+        
     gateway_used = payment_record.get('gateway', 'ggpix') if payment_record else 'ggpix'
     
     if gateway_used == 'paradise':
@@ -2085,6 +2175,8 @@ def check_payment(transaction_id):
         tx_info = checar_status_transacao_ggpix(transaction_id)
         
     if not tx_info:
+        if payment_record:
+            return jsonify({"status": payment_record.get('status', 'PENDING')})
         return jsonify({"status": "ERROR"}), 500
         
     status = tx_info.get('status', 'PENDING')
@@ -2116,7 +2208,6 @@ def check_payment(transaction_id):
                 )
             
     return jsonify({"status": status})
-
 
 @app.route('/api/generate_token', methods=['POST'])
 def api_generate_token():
