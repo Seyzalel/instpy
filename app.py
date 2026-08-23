@@ -1114,7 +1114,7 @@ HTML_TEMPLATE = """
                 <div class="plan-features">
                     - Gera até 5 tokens de senha por dia.<br>
                     - Acesso a contas de até 5.000 seguidores.<br>
-                    - Equivalente a menos de R$ 1,00 por dia.
+                    - Equivalente a R$ 0,57 centavos por dia.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('pro')">Atualizar para Pro</button>
             </div>
