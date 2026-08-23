@@ -159,7 +159,7 @@ def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagado
         "amountCents": valor_centavos,
         "description": descricao,
         "payerName": nome_pagador,
-        "payerDocument": cpf_pagador,
+        "payerDocument": cpf_pagador, # CPF REAL DO USUÁRIO
         "externalId": external_id
     }
     try:
@@ -167,7 +167,7 @@ def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagado
         response.raise_for_status()
         return response.json()
     except requests.exceptions.HTTPError as err:
-        print(f"Erro ao gerar PIX (GGPIX): {err}")
+        print(f"Erro ao gerar PIX (GGPIX): {err} - Response: {response.text if 'response' in locals() else ''}")
         return None
 
 def checar_status_transacao_ggpix(transaction_id):
@@ -201,7 +201,7 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
             "name": nome_pagador,
             "email": "suporte@instpygateway.com",
             "phone": "11999999999",
-            "document": cpf_pagador
+            "document": cpf_pagador # CPF REAL DO USUÁRIO
         }
     }
     try:
@@ -256,7 +256,6 @@ META_PIXEL_ID = "2263127927859713"
 META_ACCESS_TOKEN = "EAAY3pJasrWUBSBFHDzEBUyZCKXQSILBT6o0fhuPipIUp3KUg0BtZBcSsIJM4BRJFHrwnJb55wtEjbigGFlx2ZAFyN4DpxI02Tm8wchsLBo42IPbUSFdSzZBunpplyiYFcXZBYWzFjt0XerPSYgzBwsZBYxdu7fO8B8h4OQLTlqPo0TBsGqXVOHdFd6N7iyNEFE8wZDZD"
 
 def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id, fbp=None, fbc=None):
-    # Passando o token via URL garante suporte 100% oficial pela API Graph atual (v20.0)
     url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
@@ -266,7 +265,6 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     else:
         value = 0.00
 
-    # User Data avançado para maximizar a Qualidade de Correspondência de Evento (EMQ)
     user_data = {
         "client_ip_address": client_ip,
         "client_user_agent": user_agent,
@@ -492,7 +490,7 @@ HTML_TEMPLATE = """
         }
 
         /* Modal / View */
-        .modal-overlay, .upgrade-modal-overlay, .payment-modal-overlay, .success-modal-overlay {
+        .modal-overlay, .upgrade-modal-overlay, .success-modal-overlay {
             display: none;
             position: fixed;
             top: 0;
@@ -511,12 +509,12 @@ HTML_TEMPLATE = """
             -webkit-overflow-scrolling: touch;
         }
         
-        .upgrade-modal-overlay, .payment-modal-overlay, .success-modal-overlay {
+        .upgrade-modal-overlay, .success-modal-overlay {
             z-index: 1005;
             background-color: rgba(0, 0, 0, 0.6);
         }
 
-        .upgrade-modal-content, .payment-modal-content, .success-modal-content {
+        .upgrade-modal-content, .success-modal-content {
             background-color: var(--bg-white);
             width: 90%;
             max-width: 340px;
@@ -525,6 +523,26 @@ HTML_TEMPLATE = """
             text-align: center;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             position: relative;
+        }
+
+        /* Novo visual do Modal de Pagamento: Tela Cheia e Limpa */
+        #payment-modal {
+            z-index: 1005;
+            background-color: var(--bg-body); /* Fundo claro e limpo */
+        }
+        .payment-view {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 340px;
+            text-align: center;
+            margin: auto;
+            background-color: var(--bg-white);
+            padding: 30px 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
         }
 
         @keyframes fadeIn {
@@ -826,6 +844,36 @@ HTML_TEMPLATE = """
             background-color: #128C7E;
         }
 
+        /* Elementos de Checkout e CPF */
+        .cpf-input {
+            width: 100%;
+            background-color: var(--bg-white);
+            border: 1px solid var(--border-color);
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 16px !important;
+            margin-bottom: 12px;
+            text-align: center;
+            letter-spacing: 1px;
+            color: var(--text-primary);
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .cpf-input:focus {
+            border-color: var(--ig-blue);
+            background-color: var(--bg-white);
+        }
+        .privacy-notice {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.4;
+            text-align: left;
+            background-color: #F9F9F9;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
         /* Checkout Pix */
         .pix-qr-container {
             margin: 15px 0;
@@ -864,7 +912,7 @@ HTML_TEMPLATE = """
             margin-bottom: 15px;
         }
         .pix-trust-msg {
-            font-size: 12px;
+            font-size: 13px;
             color: var(--success-color);
             font-weight: 600;
             margin-bottom: 15px;
@@ -928,7 +976,6 @@ HTML_TEMPLATE = """
                 <b>Para especialistas:</b> O script atua interceptando o handshake de validação e injeta um payload forjado diretamente no fluxo de autenticação OAuth. Nós calculamos uma colisão no hash de sessão em memória, forçando os nós de cache do servidor a reconhecerem o token gerado como uma chave de acesso válida. Devido à extrema volatilidade dessa inserção, o token injetado sofre invalidação (drop) em aproximadamente 60 segundos ou no processamento do POST.
             </p>
             
-            <!-- VÍDEO TUTORIAL ADICIONADO AQUI CONFORME EXIGIDO -->
             <div style="width: 100%; border-radius: 8px; overflow: hidden; margin-top: 15px; border: 1px solid var(--border-color); background-color: #000;">
                 <video width="100%" controls playsinline preload="metadata" poster="/tutorial/thumbnail.PNG" style="display: block;">
                     <source src="/tutorial/instpy_tutorial.mp4" type="video/mp4">
@@ -944,7 +991,7 @@ HTML_TEMPLATE = """
     </div>
     {% endif %}
 
-    <!-- Modal Fullscreen sem bordas/cards -->
+    <!-- Modal Fullscreen da Conta -->
     <div class="modal-overlay" id="modal">
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <div class="profile-view">
@@ -964,7 +1011,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Botão e área de token -->
             <button id="gen-token-btn" class="token-btn" onclick="checkEligibilityAndGenerate()">Gerar token de senha temporária</button>
             <div id="eligibility-error" style="color: var(--ig-error); font-size: 13px; margin-top: 10px; display: none; font-weight: bold;"></div>
             
@@ -1042,40 +1088,54 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Modal de Pagamento Pix -->
-    <div class="payment-modal-overlay" id="payment-modal">
-        <div class="payment-modal-content">
-            <div class="plan-title">Pagamento via PIX</div>
-            <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
+    <!-- Modal de Pagamento Pix (Tela Cheia e Limpa) -->
+    <div class="modal-overlay" id="payment-modal">
+        <span class="close-btn" onclick="cancelPayment()">&times;</span>
+        <div class="payment-view">
             
-            <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
-                O plano será ativado para a sessão de ID:<br>
-                <b style="color: var(--text-primary); font-family: monospace; font-size: 14px;">{{ session_id }}</b>
-            </div>
-            
-            <!-- ESTADO DE CARREGAMENTO -->
-            <div id="pix-loading" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 0;">
-                <div class="spinner"></div>
-                <div class="loading-dots" style="margin-top: 15px; font-size: 14px;">Gerando cobrança PIX</div>
+            <!-- Etapa 1: Solicitar CPF -->
+            <div id="cpf-step" style="width: 100%;">
+                <div class="plan-title" style="font-size: 18px; margin-bottom: 10px;">Dados de Pagamento</div>
+                <div class="plan-desc" style="margin-bottom: 20px;">Para processar seu PIX com segurança e garantir a aprovação instantânea junto ao Banco Central, informe seu CPF.</div>
+                
+                <input type="tel" id="user-cpf" class="cpf-input" placeholder="Digite seu CPF (Somente números)" maxlength="14" autocomplete="off">
+                
+                <div class="privacy-notice">
+                    🔒 <b>Privacidade e Segurança:</b> Seu CPF é utilizado estritamente para o processamento e aprovação do pagamento. Nós <b>não armazenamos</b> este dado em nossos servidores, garantindo total sigilo e proteção da sua identidade.
+                </div>
+                
+                <button class="plan-btn" style="padding: 14px; font-size: 15px;" onclick="processCheckout()">Gerar PIX Agora</button>
             </div>
 
-            <!-- ESTADO DO PIX GERADO -->
-            <div id="pix-content" style="display: none;">
+            <!-- Etapa 2: Loading de Conexão -->
+            <div id="pix-loading" style="display: none; flex-direction: column; align-items: center; justify-content: center; padding: 40px 0; width: 100%;">
+                <div class="spinner"></div>
+                <div class="loading-dots" style="margin-top: 20px; font-size: 14px;">Conectando ao Banco Central</div>
+            </div>
+
+            <!-- Etapa 3: Exibição do QR Code PIX -->
+            <div id="pix-content" style="display: none; width: 100%;">
+                <div class="plan-title" style="font-size: 18px; margin-bottom: 5px;">Pagamento via PIX</div>
+                <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
+                
+                <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid var(--border-color);">
+                    O plano será ativado para a sessão:<br>
+                    <b style="color: var(--text-primary); font-family: monospace; font-size: 14px;">{{ session_id }}</b>
+                </div>
+                
                 <div class="pix-qr-container">
                     <img src="" alt="QR Code PIX" class="pix-qr" id="pix-qr-img">
                 </div>
                 
                 <div class="pix-copy-area">
                     <div class="pix-hash" id="pix-hash-text"></div>
-                    <button class="copy-btn" id="pix-copy-btn" style="width: 100%; margin-top: 8px;" onclick="copyPix()">Copiar Código PIX</button>
+                    <button class="copy-btn" id="pix-copy-btn" style="width: 100%; margin-top: 10px; padding: 12px; font-size: 14px;" onclick="copyPix()">Copiar Código PIX</button>
                 </div>
                 
                 <div class="pix-timer">O pagamento expira em 5 minutos.</div>
-                
-                <div class="loading-dots">Aguardando pagamento</div>
+                <div class="loading-dots" style="font-size: 14px;">Aguardando confirmação do banco</div>
             </div>
-            
-            <button class="plan-btn" style="background-color: var(--input-bg); color: var(--text-primary); margin-top: 15px;" onclick="cancelPayment()">Cancelar</button>
+
         </div>
     </div>
 
@@ -1096,6 +1156,7 @@ HTML_TEMPLATE = """
         let currentTargetUsername = "";
         let isTargetVerified = false;
         let pollInterval = null;
+        let selectedPlan = "";
 
         async function fetchData() {
             const inputVal = document.getElementById('target-input').value.trim();
@@ -1174,7 +1235,6 @@ HTML_TEMPLATE = """
                     btnFeedback(btnId);
                 });
             } else {
-                // Fallback cross-browser compatível
                 const textArea = document.createElement("textarea");
                 textArea.value = text;
                 document.body.appendChild(textArea);
@@ -1204,7 +1264,6 @@ HTML_TEMPLATE = """
             const errorDiv = document.getElementById('eligibility-error');
             errorDiv.style.display = 'none';
             
-            // Regra absoluta do frontend
             if (isTargetVerified) {
                 errorDiv.innerText = "[AVISO] Não é possível gerar token para contas verificadas nestes planos. Contate o suporte.";
                 errorDiv.style.display = 'block';
@@ -1216,13 +1275,11 @@ HTML_TEMPLATE = """
                 const data = await res.json();
                 
                 if (data.plan === 'basic') {
-                    // Abre modal de upgrade
                     document.getElementById('upgrade-modal').style.display = 'flex';
                 } else if (!data.can_generate) {
                     errorDiv.innerText = `[AVISO] Limite de tokens atingido para hoje (${data.tokens_used}/${data.limit}).`;
                     errorDiv.style.display = 'block';
                 } else {
-                    // Autorizado
                     generateToken();
                 }
             } catch(e) {
@@ -1234,20 +1291,36 @@ HTML_TEMPLATE = """
             document.getElementById('upgrade-modal').style.display = 'none';
         }
 
-        async function initiateCheckout(planName) {
+        function initiateCheckout(planName) {
+            selectedPlan = planName;
             document.getElementById('upgrade-modal').style.display = 'none';
             document.getElementById('payment-modal').style.display = 'flex';
             
-            // Oculta área de pix gerada e mostra o loading
-            document.getElementById('pix-loading').style.display = 'flex';
+            // Reseta a view para a etapa 1 (CPF)
+            document.getElementById('cpf-step').style.display = 'block';
+            document.getElementById('pix-loading').style.display = 'none';
             document.getElementById('pix-content').style.display = 'none';
-            document.getElementById('pix-copy-btn').disabled = true;
+            document.getElementById('user-cpf').value = '';
+        }
+
+        async function processCheckout() {
+            // Limpa o CPF deixando apenas números
+            const cpfInput = document.getElementById('user-cpf').value.replace(/\\D/g, '');
+            
+            if (cpfInput.length !== 11 && cpfInput.length !== 14) {
+                alert("Por favor, insira um CPF ou CNPJ válido contendo 11 ou 14 números.");
+                return;
+            }
+
+            // Transição para a tela de carregamento
+            document.getElementById('cpf-step').style.display = 'none';
+            document.getElementById('pix-loading').style.display = 'flex';
 
             try {
                 const res = await fetch('/api/checkout', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ plan: planName })
+                    body: JSON.stringify({ plan: selectedPlan, cpf: cpfInput })
                 });
                 
                 const data = await res.json();
@@ -1260,7 +1333,6 @@ HTML_TEMPLATE = """
                 // Preenche os dados recebidos na View
                 document.getElementById('pix-qr-img').src = "data:image/png;base64," + data.qr_base64;
                 document.getElementById('pix-hash-text').innerText = data.pix_copy_paste;
-                document.getElementById('pix-copy-btn').disabled = false;
                 
                 // Transição suave para o Pix gerado
                 document.getElementById('pix-loading').style.display = 'none';
@@ -1271,7 +1343,7 @@ HTML_TEMPLATE = """
                 
             } catch(e) {
                 console.error(e);
-                alert("Erro de conexão ao gerar checkout.");
+                alert("Erro de conexão ao gerar checkout. Verifique sua internet.");
                 cancelPayment();
             }
         }
@@ -1628,7 +1700,6 @@ CONFIG_HTML_TEMPLATE = """
 # Meticulosamente configurado para expor a pasta "tutorial" da raiz
 @app.route('/tutorial/<path:filename>')
 def serve_tutorial(filename):
-    # Encontra o caminho absoluto do diretório raiz onde o script está rodando
     base_dir = os.path.abspath(os.path.dirname(__file__))
     tutorial_dir = os.path.join(base_dir, 'tutorial')
     return send_from_directory(tutorial_dir, filename)
@@ -1650,7 +1721,6 @@ def get_or_create_user(session_id):
 
 @app.route('/')
 def index():
-    # Detecta se é apenas um prefetch/preload do navegador na barra de pesquisa
     is_prefetch = request.headers.get('Purpose') == 'prefetch' or \
                   request.headers.get('X-Purpose') == 'preview' or \
                   request.headers.get('Sec-Fetch-Dest') in ['empty', 'image', 'script', 'style']
@@ -1663,12 +1733,10 @@ def index():
         session_id = uuid.uuid4().hex
         is_new_session = True
     else:
-        # Se a sessão já existe no cookie, buscamos o plano no banco caso a conta já tenha sido criada (interagida)
         user = users_collection.find_one({"session_id": session_id})
         if user:
             user_plan = user.get("plan", "basic")
 
-    # Busca configurações globais (WhatsApp)
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
 
@@ -1680,7 +1748,6 @@ def index():
     )
     response = make_response(rendered_html)
 
-    # Só define o cookie se for uma nova sessão E não for um acesso fantasma (prefetch)
     if is_new_session and not is_prefetch:
         expiration_date = datetime.now() + timedelta(days=3650)
         response.set_cookie('user_session_id', session_id, expires=expiration_date)
@@ -1739,7 +1806,6 @@ def session_config():
                 )
                 msg = f"[SUCESSO] Plano do usuário {target_id} alterado para {new_plan.upper()}."
 
-    # Prepara dados para a view GET
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
     pix_gateway = settings.get("pix_gateway", "ggpix") if settings else "ggpix"
@@ -1774,7 +1840,6 @@ def get_target_info():
     if not target_input:
         return jsonify({"error": "Nenhum dado fornecido."}), 400
 
-    # O usuário interagiu com o site. Agora sim criamos a conta dele no banco de dados, se ainda não existir.
     if session_id != 'sessao_nao_identificada':
         get_or_create_user(session_id)
 
@@ -1789,20 +1854,16 @@ def get_target_info():
             
     username = username.replace('@', '').strip()
 
-    # --- CAMADA 1: CACHE NA MEMÓRIA RAM (CONSUMO ZERO) ---
     if username in MEMORY_CACHE:
         return jsonify(MEMORY_CACHE[username])
         
-    # --- CAMADA 2: CACHE NO MONGODB (CONSUMO ZERO DE PROXY) ---
     cached_db = profiles_cache_collection.find_one({"username_buscado": username})
     if cached_db:
-        del cached_db['_id'] # Remove _id do mongo antes de jsonify
-        MEMORY_CACHE[username] = cached_db # Salva na RAM para a próxima ser ainda mais rápida
+        del cached_db['_id']
+        MEMORY_CACHE[username] = cached_db
         return jsonify(cached_db)
 
-    # --- CAMADA 3: INSTAGRAPI (APENAS SE O PERFIL NUNCA FOI PESQUISADO ANTES) ---
     try:
-        # Só inicializa e conecta o instagrapi AQUI. (Lazy Loading)
         client_insta = get_insta_client()
         user_info = client_insta.user_info_by_username(username)
         
@@ -1825,12 +1886,10 @@ def get_target_info():
             "follower_count": user_info.follower_count,
             "following_count": user_info.following_count,
             "is_verified": getattr(user_info, 'is_verified', False),
-            "username_buscado": username # Chave para o BD
+            "username_buscado": username
         }
         
-        # Salva o resultado no banco de dados e na memória RAM para as próximas pesquisas
         profiles_cache_collection.insert_one(result_data.copy())
-        # Remove a chave username_buscado antes de mandar para o frontend e RAM (sujeira)
         del result_data["username_buscado"]
         MEMORY_CACHE[username] = result_data
         
@@ -1881,6 +1940,15 @@ def checkout():
     session_id = request.cookies.get('user_session_id')
     data = request.json
     plan_requested = data.get('plan')
+    user_cpf = data.get('cpf')
+    
+    if not user_cpf:
+        return jsonify({"error": "O CPF é obrigatório para gerar o pagamento."}), 400
+        
+    # Limpa o CPF garantindo apenas números
+    user_cpf = re.sub(r'[^0-9]', '', user_cpf)
+    if len(user_cpf) != 11 and len(user_cpf) != 14:
+         return jsonify({"error": "CPF/CNPJ inválido."}), 400
     
     if plan_requested == 'pro':
         valor_centavos = 3000
@@ -1891,14 +1959,11 @@ def checkout():
     else:
         return jsonify({"error": "Plano invalido."}), 400
         
-    # Identifica Gateway Ativo para gerar PIX
     gateway = get_active_gateway()
     payer_name = "Instpy Gateway"
-    payer_cpf = "57174090877"
+    payer_cpf = user_cpf # CPF REAL DO USUÁRIO INSERIDO NA TELA
     
     if gateway == "paradise":
-        # CORREÇÃO: A API Paradise usa centavos (3000 = R$ 30,00). 
-        # Removida a divisão por 100 para garantir que o valor seja exato.
         pix_data = criar_cobranca_pix_paradise(valor_centavos, desc, payer_name, payer_cpf)
         if not pix_data:
             return jsonify({"error": "Falha na comunicacao com provedor Paradise."}), 500
@@ -1910,7 +1975,6 @@ def checkout():
     transaction_id = pix_data['id']
     copia_e_cola = pix_data['pixCopyPaste']
     
-    # Gerar imagem QR Code Base64 nativamente com Pillow/qrcode (Seguro e Rápido)
     qr = qrcode.QRCode(box_size=10, border=2)
     qr.add_data(copia_e_cola)
     qr.make(fit=True)
@@ -1920,11 +1984,9 @@ def checkout():
     img.save(buf, format='PNG')
     qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     
-    # Captura avançada de cookies do Meta CAPI (Melhora absurdamente o EMQ no ADS)
     fbp = request.cookies.get('_fbp')
     fbc = request.cookies.get('_fbc')
     
-    # Registrar pagamento pendente salvando o Gateway utilizado (Evita conflitos no Polling)
     payments_collection.insert_one({
         "transaction_id": transaction_id,
         "session_id": session_id,
@@ -1946,7 +2008,6 @@ def checkout():
 
 @app.route('/api/check_payment/<transaction_id>', methods=['GET'])
 def check_payment(transaction_id):
-    # Encontra o registro para usar a mesma API que GEROU esse Pix!
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
     gateway_used = payment_record.get('gateway', 'ggpix') if payment_record else 'ggpix'
     
@@ -1960,33 +2021,27 @@ def check_payment(transaction_id):
         
     status = tx_info.get('status', 'PENDING')
     
-    # Atualiza banco de dados do pagamento
     payments_collection.update_one(
         {"transaction_id": transaction_id},
         {"$set": {"status": status, "updated_at": datetime.utcnow()}}
     )
     
     if status == 'COMPLETE':
-        # Libera o plano imediatamente para a sessao
         if payment_record:
             users_collection.update_one(
                 {"session_id": payment_record['session_id']},
                 {"$set": {"plan": payment_record['plan_requested']}}
             )
             
-            # --- INTEGRAÇÃO META PIXEL CAPI (PURCHASE 100% BLINDADA) ---
             if not payment_record.get('pixel_fired'):
-                # Resgata os cookies originais injetados durante a compra (Maior EMQ Meta ADS)
                 client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
                 user_agent = request.headers.get('User-Agent', '')
                 plan_requested = payment_record.get('plan_requested', '')
                 fbp = payment_record.get('fbp_cookie')
                 fbc = payment_record.get('fbc_cookie')
 
-                # Dispara a função CAPI de retaguarda
                 send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_id, fbp, fbc)
                 
-                # Flag para impedir múltiplas submissões CAPI no loop
                 payments_collection.update_one(
                     {"transaction_id": transaction_id},
                     {"$set": {"pixel_fired": True}}
@@ -1999,7 +2054,6 @@ def check_payment(transaction_id):
 def api_generate_token():
     session_id = request.cookies.get('user_session_id', 'sessao_nao_identificada')
     
-    # Incrementa contador de token do dia antes de gerar
     user = get_or_create_user(session_id)
     today = get_today_str()
     tokens_used_dict = user.get('tokens_used_today', {})
@@ -2011,7 +2065,6 @@ def api_generate_token():
         {"$set": {"tokens_used_today": tokens_used_dict}}
     )
     
-    # Verifica legado
     config = config_collection.find_one({"session_id": session_id})
     if config and config.get("custom_token"):
         token = config.get("custom_token")
