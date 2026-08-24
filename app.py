@@ -99,7 +99,7 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (OTIMIZADA)
 # ==========================================
-SESSION_ID = "53793198529%3AkgZrvZqmBbxoKh%3A2%3AAYjjhK_4P5YdXqyLYjIfpRexDEFdRGhM2ZdNG-r_Yw"
+SESSION_ID = "53793198529%3ABBuGlr0PzMSfiy%3A15%3AAYj0mgCO8qU75rPDgUMaSmhWh6JBberu8uTQvKGghQ"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
 
 insta_client_singleton = None
