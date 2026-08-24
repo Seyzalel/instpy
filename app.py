@@ -102,7 +102,7 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (BLINDADA CONTRA CHECKPOINT)
 # ==========================================
-SESSION_ID = "53793198529%3ABBuGlr0PzMSfiy%3A15%3AAYj0mgCO8qU75rPDgUMaSmhWh6JBberu8uTQvKGghQ"
+SESSION_ID = "53793198529%3A6EKv3WAyEIsVri%3A16%3AAYiMCI2zVwThR3ahG-a6dn8_ZL3slFIYSvOg-rDA-Q"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
 
 insta_client_singleton = None
