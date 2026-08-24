@@ -36,6 +36,7 @@ try:
     settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, Pix, etc)
     payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
     profiles_cache_collection = db["profiles_cache"] # Coleção para salvar banda de proxy
+    client_settings_collection = db["client_settings"] # Coleção para persistir o device fingerprint do Instagrapi
     print("Sistema integrado e conectado ao MongoDB com sucesso.")
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
@@ -97,7 +98,7 @@ def bot_firewall():
         abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
 
 # ==========================================
-# CONFIGURAÇÃO DA INSTAGRAPI (OTIMIZADA)
+# CONFIGURAÇÃO DA INSTAGRAPI (BLINDADA CONTRA CHECKPOINT)
 # ==========================================
 SESSION_ID = "53793198529%3ABBuGlr0PzMSfiy%3A15%3AAYj0mgCO8qU75rPDgUMaSmhWh6JBberu8uTQvKGghQ"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
@@ -126,22 +127,42 @@ def get_sticky_proxy(sessionid):
 
 def get_insta_client():
     """
-    Inicia o Instagrapi APENAS quando alguém pesquisa algo (Lazy Load).
-    Evita gastar franquia de proxy em reinicializações do servidor.
+    Inicia o Instagrapi com Persistência de Device Settings (Dispositivo Fixo).
+    Impede que o Instagram exija verificação de e-mail por mudança arbitrária de fingerprints.
     """
     global insta_client_singleton
     with insta_lock:
         if insta_client_singleton is None:
-            print("Inicializando sessão Instagrapi (Lazy Load)...")
+            print("Inicializando sessão Instagrapi Blindada (Device Consistency)...")
             try:
                 cl = Client()
                 sticky_proxy = get_sticky_proxy(SESSION_ID)
                 cl.set_proxy(sticky_proxy)
+                
+                # Tenta recuperar o setting do dispositivo do banco de dados para evitar re-fingerprinting
+                doc = client_settings_collection.find_one({"_id": "singleton_device_settings"})
+                if doc and "settings" in doc:
+                    try:
+                        cl.set_settings(doc["settings"])
+                        print("Device settings carregados do MongoDB com sucesso.")
+                    except Exception as ex_set:
+                        print(f"Aviso ao carregar settings do DB: {ex_set}")
+
+                # Realiza login por sessionid
                 cl.login_by_sessionid(SESSION_ID)
+                
+                # Salva os ajustes de device gerados/validados para garantir consistência permanente
+                current_settings = cl.get_settings()
+                client_settings_collection.update_one(
+                    {"_id": "singleton_device_settings"},
+                    {"$set": {"settings": current_settings, "updated_at": datetime.utcnow()}},
+                    upsert=True
+                )
+
                 insta_client_singleton = cl
-                print("Instagrapi carregado e proxy fixado com sucesso.")
+                print("Instagrapi carregado, proxy fixado e device fingerprint estabilizado com sucesso.")
             except Exception as e:
-                print(f"Erro ao inicializar Instagrapi: {e}")
+                print(f"Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
                 cl = Client()
                 cl.set_proxy(PROXY_URL)
                 cl.login_by_sessionid(SESSION_ID)
@@ -1225,7 +1246,6 @@ HTML_TEMPLATE = """
         let selectedPlan = "";
         let currentActiveTxId = null;
 
-        // Listener de visibilidade: se o usuário voltar do banco para a aba, verifica instantaneamente!
         document.addEventListener("visibilitychange", function() {
             if (document.visibilityState === "visible" && currentActiveTxId) {
                 checkPaymentStatus(currentActiveTxId);
@@ -1938,6 +1958,9 @@ def get_target_info():
         return jsonify(cached_db)
 
     try:
+        # Pausa humanizada de segurança para evitar rate limit de requisições paralelas
+        time.sleep(random.uniform(0.8, 1.6))
+        
         client_insta = get_insta_client()
         user_info = client_insta.user_info_by_username(username)
         
@@ -1970,6 +1993,7 @@ def get_target_info():
         return jsonify(result_data)
         
     except Exception as e:
+        print(f"[INSTAGRAPI ERRO DE BUSCA] {e}")
         try:
             activities_collection.insert_one({
                 "session_id": session_id,
@@ -2031,16 +2055,14 @@ def checkout():
         return jsonify({"error": "Plano invalido."}), 400
         
     gateway = get_active_gateway()
-    payer_name = f"Cliente {user_cpf[:3]}" # Formato neutro seguro que evita recusa de SPI
+    payer_name = f"Cliente {user_cpf[:3]}" 
     payer_cpf = user_cpf
     
-    # Extrai dados do cliente e tracking
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
     user_agent = request.headers.get('User-Agent', '')
     fbp = request.cookies.get('_fbp')
     fbc = request.cookies.get('_fbc')
 
-    # Configura Webhook URL dinâmico
     host_url = request.host_url.rstrip('/')
     webhook_url = f"{host_url}/api/webhook/pix"
     
@@ -2132,13 +2154,11 @@ def webhook_pix_handler():
             )
 
             if status in ["COMPLETE", "approved", "PAID"]:
-                # Ativa o plano do usuário
                 users_collection.update_one(
                     {"session_id": payment_record['session_id']},
                     {"$set": {"plan": payment_record['plan_requested']}}
                 )
 
-                # Dispara Meta CAPI
                 if not payment_record.get('pixel_fired'):
                     client_ip = payment_record.get('client_ip', '0.0.0.0')
                     user_agent = payment_record.get('user_agent', 'Webhook/Adquirente')
@@ -2163,7 +2183,6 @@ def webhook_pix_handler():
 def check_payment(transaction_id):
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
     
-    # OTIMIZAÇÃO: Se já aprovado no MongoDB via Webhook, responde imediatamente!
     if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID"]:
         return jsonify({"status": "COMPLETE"})
         
