@@ -335,11 +335,12 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
 # ==========================================
-# COMPONENTE DE NOTIFICAÇÃO GLOBAL (INJETADO EM TODOS OS TEMPLATES)
+# COMPONENTE DE NOTIFICAÇÃO (APENAS PÁGINA PRINCIPAL)
 # ==========================================
 NOTIFICATION_COMPONENT_HTML = """
 <style>
-    .notif-bell-wrapper { position: fixed; top: 11px; right: 20px; z-index: 10000; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    /* O top foi alterado para 55px para ficar logo abaixo da toolbar de 44px, não sobrepondo os textos dela */
+    .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 10000; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .notif-badge { display: none; position: absolute; top: -4px; right: -6px; background: #ED4956; color: white; font-size: 10px; font-weight: 700; border-radius: 50%; padding: 2px 5px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.2); pointer-events: none; }
     .notif-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; background: rgba(0,0,0,0.6); z-index: 10001; flex-direction: column; justify-content: center; align-items: center; animation: fadeIn 0.2s ease-out; }
     .notif-modal-content { background: var(--bg-white, #FFFFFF); width: 90%; max-width: 380px; max-height: 80vh; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
@@ -1925,8 +1926,6 @@ CONFIG_HTML_TEMPLATE = """
             </table>
         </div>
     </div>
-    
-    {{ notification_component | safe }}
 </body>
 </html>
 """
@@ -2071,8 +2070,6 @@ NOTIFICATION_ADMIN_HTML = """
             </table>
         </div>
     </div>
-    
-    {{ notification_component | safe }}
 </body>
 </html>
 """
@@ -2214,8 +2211,7 @@ def session_config():
         pix_gateway=pix_gateway,
         users=users,
         today_str=get_today_str(),
-        msg=msg,
-        notification_component=NOTIFICATION_COMPONENT_HTML
+        msg=msg
     )
 
 @app.route('/notification/client/config', methods=['GET', 'POST'])
@@ -2272,8 +2268,7 @@ def notification_admin():
         NOTIFICATION_ADMIN_HTML,
         notifications=all_notifs,
         msg=msg,
-        edit_notif=edit_notif,
-        notification_component=NOTIFICATION_COMPONENT_HTML
+        edit_notif=edit_notif
     )
 
 @app.route('/api/notifications', methods=['GET'])
