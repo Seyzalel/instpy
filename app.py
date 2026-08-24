@@ -18,6 +18,7 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 from urllib.parse import unquote
+from bson import ObjectId
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -37,6 +38,7 @@ try:
     payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
     profiles_cache_collection = db["profiles_cache"] # Coleção para salvar banda de proxy
     client_settings_collection = db["client_settings"] # Coleção para persistir o device fingerprint do Instagrapi
+    notifications_collection = db["notifications"] # Coleção do Sistema de Notificações
     print("Sistema integrado e conectado ao MongoDB com sucesso.")
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
@@ -331,6 +333,142 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
             print(f"[META CAPI ERRO] Falha ao disparar evento de Purchase. Código: {response.status_code} | Resposta: {response.text}")
     except Exception as e:
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
+
+# ==========================================
+# COMPONENTE DE NOTIFICAÇÃO GLOBAL (INJETADO EM TODOS OS TEMPLATES)
+# ==========================================
+NOTIFICATION_COMPONENT_HTML = """
+<style>
+    .notif-bell-wrapper { position: fixed; top: 11px; right: 20px; z-index: 10000; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .notif-badge { display: none; position: absolute; top: -4px; right: -6px; background: #ED4956; color: white; font-size: 10px; font-weight: 700; border-radius: 50%; padding: 2px 5px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.2); pointer-events: none; }
+    .notif-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; background: rgba(0,0,0,0.6); z-index: 10001; flex-direction: column; justify-content: center; align-items: center; animation: fadeIn 0.2s ease-out; }
+    .notif-modal-content { background: var(--bg-white, #FFFFFF); width: 90%; max-width: 380px; max-height: 80vh; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
+    .notif-header { padding: 18px 20px; border-bottom: 1px solid var(--border-color, #DBDBDB); display: flex; justify-content: space-between; align-items: center; background: #FAFAFA; }
+    .notif-title-main { font-size: 16px; font-weight: 700; color: var(--text-primary, #262626); margin: 0; letter-spacing: -0.3px; }
+    .notif-close { font-size: 26px; cursor: pointer; color: var(--text-secondary, #737373); line-height: 1; font-weight: 300; padding: 5px; margin: -5px; transition: color 0.2s; }
+    .notif-close:hover { color: var(--text-primary, #262626); }
+    .notif-body { overflow-y: auto; flex: 1; background: var(--bg-white, #FFFFFF); padding: 0; }
+    .notif-item { padding: 16px 20px; border-bottom: 1px solid var(--border-color, #DBDBDB); transition: background 0.2s; text-align: left; }
+    .notif-item:last-child { border-bottom: none; }
+    .notif-item.unread { background: rgba(0, 149, 246, 0.04); border-left: 3px solid #0095F6; padding-left: 17px; }
+    .notif-item-title { font-weight: 600; font-size: 14px; color: var(--text-primary, #262626); margin-bottom: 4px; }
+    .notif-item-msg { font-size: 13px; color: var(--text-secondary, #737373); line-height: 1.45; margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
+    .notif-item-time { font-size: 11px; color: #a8a8a8; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+    .notif-empty { padding: 40px 20px; text-align: center; color: var(--text-secondary, #737373); font-size: 14px; }
+</style>
+
+<div class="notif-bell-wrapper" onclick="openNotifModal()">
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-primary, #262626);">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+    </svg>
+    <div class="notif-badge" id="global-notif-badge">0</div>
+</div>
+
+<div class="notif-modal-overlay" id="global-notif-modal">
+    <div class="notif-modal-content">
+        <div class="notif-header">
+            <h2 class="notif-title-main">Notificações</h2>
+            <span class="notif-close" onclick="closeNotifModal()">&times;</span>
+        </div>
+        <div class="notif-body" id="notif-list-container">
+            <div class="notif-empty">
+                <div style="width: 20px; height: 20px; border: 2px solid #DBDBDB; border-top-color: #737373; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px auto;"></div>
+                Carregando...
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let unreadNotifIds = [];
+
+    function formatRelativeTime(dateString) {
+        const d = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - d;
+        
+        const diffSecs = Math.floor(diffMs / 1000);
+        const diffMins = Math.floor(diffSecs / 60);
+        const diffHours = Math.floor(diffMins / 60);
+        const diffDays = Math.floor(diffHours / 24);
+
+        if (diffDays >= 7) {
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}/${month}/${year}`;
+        }
+
+        if (diffSecs < 60) return diffSecs <= 1 ? "há 1 segundo" : `há ${diffSecs} segundos`;
+        if (diffMins < 60) return diffMins === 1 ? "há 1 minuto" : `há ${diffMins} minutos`;
+        if (diffHours < 24) return diffHours === 1 ? "há 1 hora" : `há ${diffHours} horas`;
+        return diffDays === 1 ? "há 1 dia" : `há ${diffDays} dias`;
+    }
+
+    async function fetchNotifs() {
+        try {
+            const res = await fetch('/api/notifications');
+            const data = await res.json();
+            
+            const badge = document.getElementById('global-notif-badge');
+            if (data.unread_count > 0) {
+                badge.innerText = data.unread_count > 99 ? '99+' : data.unread_count;
+                badge.style.display = 'block';
+            } else {
+                badge.style.display = 'none';
+            }
+
+            unreadNotifIds = data.notifications.filter(n => !n.is_read).map(n => n.id);
+            
+            const container = document.getElementById('notif-list-container');
+            if (data.notifications.length === 0) {
+                container.innerHTML = '<div class="notif-empty">Você não possui notificações recentes.</div>';
+                return;
+            }
+
+            container.innerHTML = data.notifications.map(n => `
+                <div class="notif-item ${n.is_read ? '' : 'unread'}">
+                    <div class="notif-item-title">${n.title}</div>
+                    <div class="notif-item-msg">${n.message}</div>
+                    <div class="notif-item-time">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        ${formatRelativeTime(n.created_at)}
+                    </div>
+                </div>
+            `).join('');
+            
+        } catch (e) {
+            console.error("Erro ao buscar notificações", e);
+        }
+    }
+
+    function openNotifModal() {
+        document.getElementById('global-notif-modal').style.display = 'flex';
+        if (unreadNotifIds.length > 0) {
+            fetch('/api/notifications/read', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: unreadNotifIds })
+            }).then(() => {
+                document.getElementById('global-notif-badge').style.display = 'none';
+                unreadNotifIds = [];
+                // Remove visual unread class smoothly
+                document.querySelectorAll('.notif-item.unread').forEach(el => {
+                    setTimeout(() => el.classList.remove('unread'), 1500);
+                });
+            });
+        }
+    }
+
+    function closeNotifModal() {
+        document.getElementById('global-notif-modal').style.display = 'none';
+    }
+
+    document.addEventListener("DOMContentLoaded", fetchNotifs);
+    setInterval(fetchNotifs, 60000); // refresh automático a cada 1 min
+</script>
+"""
 
 # ==========================================
 # TEMPLATES HTML
@@ -1237,6 +1375,8 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
+    {{ notification_component | safe }}
+
     <script>
         let isGenerating = false;
         let forceStop = false;
@@ -1679,7 +1819,8 @@ CONFIG_HTML_TEMPLATE = """
         <h1>Painel de Administração Global</h1>
         <div style="font-size: 13px; margin-top: 5px;">Sua Sessão Atual: <b>{{ session_id }}</b></div>
         <div style="margin-top: 15px;">
-            <a href="/" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 15px;">[ Voltar para o App ]</a>
+            <a href="/" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 15px;">[ Voltar para o App ]</a> |
+            <a href="/notification/client/config" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 15px;">[ Gerenciar Notificações ]</a>
         </div>
     </div>
 
@@ -1784,9 +1925,158 @@ CONFIG_HTML_TEMPLATE = """
             </table>
         </div>
     </div>
+    
+    {{ notification_component | safe }}
 </body>
 </html>
 """
+
+# Frontend de Notificações - Administração (Painel)
+NOTIFICATION_ADMIN_HTML = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Administração de Notificações</title>
+    <style>
+        body {
+            background-color: #FAFAFA;
+            color: #262626;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 30px 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 22px;
+            color: #0095F6;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border: 1px solid #DBDBDB;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h2 { font-size: 18px; margin-bottom: 20px; border-bottom: 1px solid #EFEFEF; padding-bottom: 10px; color: #262626; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; font-size: 13px; font-weight: bold; margin-bottom: 6px; color: #737373; }
+        input, textarea { width: 100%; padding: 12px; border: 1px solid #DBDBDB; border-radius: 6px; font-family: inherit; font-size: 14px; box-sizing: border-box; background: #FAFAFA; transition: border-color 0.2s; }
+        input:focus, textarea:focus { border-color: #0095F6; outline: none; background: #FFF; }
+        .btn { background: #0095F6; color: #fff; border: none; padding: 12px 20px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.85; }
+        .btn-danger { background: #ED4956; }
+        .btn-warning { background: #F56040; }
+        .btn-secondary { background: #737373; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+        th, td { padding: 14px; text-align: left; border-bottom: 1px solid #EFEFEF; }
+        th { background: #FAFAFA; color: #737373; font-weight: bold; }
+        .msg { padding: 12px; background: #E1F5FE; color: #0277BD; border: 1px solid #B3E5FC; border-radius: 6px; margin-bottom: 20px; font-weight: 600; }
+        .actions-flex { display: flex; gap: 8px; }
+        .status-active { color: #28a745; font-weight: bold; }
+        .status-inactive { color: #ED4956; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Gerenciamento de Notificações Globais</h1>
+        <div style="margin-top: 15px;">
+            <a href="/" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 14px;">[ Voltar para o App ]</a> &nbsp;|&nbsp;
+            <a href="/session/config" style="color: #0095F6; text-decoration: none; font-weight: bold; font-size: 14px;">[ Voltar para Painel Admin ]</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        {% if msg %}
+        <div class="msg">{{ msg }}</div>
+        {% endif %}
+
+        <h2>{{ 'Editando Notificação' if edit_notif else 'Criar Nova Notificação' }}</h2>
+        <form method="POST">
+            <input type="hidden" name="action" value="{{ 'edit' if edit_notif else 'create' }}">
+            {% if edit_notif %}
+            <input type="hidden" name="id" value="{{ edit_notif._id }}">
+            {% endif %}
+            
+            <div class="form-group">
+                <label>Título da Notificação:</label>
+                <input type="text" name="title" required value="{{ edit_notif.title if edit_notif else '' }}" placeholder="Ex: Nova Atualização de Sistema!">
+            </div>
+            <div class="form-group">
+                <label>Corpo da Mensagem:</label>
+                <textarea name="message" rows="4" required placeholder="Digite a mensagem completa que o usuário irá ler...">{{ edit_notif.message if edit_notif else '' }}</textarea>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button type="submit" class="btn">{{ 'Salvar Alterações' if edit_notif else 'Disparar Notificação' }}</button>
+                {% if edit_notif %}
+                <a href="/notification/client/config"><button type="button" class="btn btn-secondary">Cancelar Edição</button></a>
+                {% endif %}
+            </div>
+        </form>
+
+        <h2 style="margin-top: 50px;">Histórico de Notificações</h2>
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th width="15%">Data / Hora</th>
+                        <th width="25%">Título</th>
+                        <th width="35%">Mensagem (Prévia)</th>
+                        <th width="10%">Status</th>
+                        <th width="15%">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for n in notifications %}
+                    <tr>
+                        <td>{{ n.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td><b>{{ n.title }}</b></td>
+                        <td style="max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ n.message }}</td>
+                        <td>
+                            {% if n.is_active %}
+                            <span class="status-active">Ativo</span>
+                            {% else %}
+                            <span class="status-inactive">Oculto</span>
+                            {% endif %}
+                        </td>
+                        <td class="actions-flex">
+                            <form method="POST" style="margin: 0;">
+                                <input type="hidden" name="action" value="toggle">
+                                <input type="hidden" name="id" value="{{ n._id }}">
+                                <button type="submit" class="btn btn-secondary" style="font-size: 11px; padding: 6px 10px;">
+                                    {{ 'Ocultar' if n.is_active else 'Exibir' }}
+                                </button>
+                            </form>
+                            <a href="?edit_id={{ n._id }}">
+                                <button type="button" class="btn btn-warning" style="font-size: 11px; padding: 6px 10px;">Editar</button>
+                            </a>
+                            <form method="POST" style="margin: 0;" onsubmit="return confirm('Tem certeza absoluta que deseja apagar essa notificação do banco de dados?');">
+                                <input type="hidden" name="action" value="delete">
+                                <input type="hidden" name="id" value="{{ n._id }}">
+                                <button type="submit" class="btn btn-danger" style="font-size: 11px; padding: 6px 10px;">Apagar</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 30px; color: #737373;">Nenhuma notificação enviada no histórico.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    {{ notification_component | safe }}
+</body>
+</html>
+"""
+
 
 # ==========================================
 # ROTAS DO BACKEND
@@ -1808,6 +2098,7 @@ def get_or_create_user(session_id):
             "session_id": session_id,
             "plan": "basic",
             "tokens_used_today": {},
+            "read_notifications": [], # Array para salvar o controle de leitura das notificações
             "created_at": datetime.utcnow()
         }
         users_collection.insert_one(user)
@@ -1838,7 +2129,8 @@ def index():
         HTML_TEMPLATE, 
         session_id=session_id, 
         user_plan=user_plan,
-        whatsapp_number=whatsapp_number
+        whatsapp_number=whatsapp_number,
+        notification_component=NOTIFICATION_COMPONENT_HTML
     )
     response = make_response(rendered_html)
 
@@ -1922,8 +2214,106 @@ def session_config():
         pix_gateway=pix_gateway,
         users=users,
         today_str=get_today_str(),
-        msg=msg
+        msg=msg,
+        notification_component=NOTIFICATION_COMPONENT_HTML
     )
+
+@app.route('/notification/client/config', methods=['GET', 'POST'])
+def notification_admin():
+    msg = ""
+    
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'create':
+            title = request.form.get('title')
+            message = request.form.get('message')
+            notifications_collection.insert_one({
+                "title": title,
+                "message": message,
+                "is_active": True,
+                "created_at": datetime.utcnow()
+            })
+            msg = "[SUCESSO] Nova notificação global enviada!"
+            
+        elif action == 'edit':
+            nid = request.form.get('id')
+            title = request.form.get('title')
+            message = request.form.get('message')
+            notifications_collection.update_one(
+                {"_id": ObjectId(nid)},
+                {"$set": {"title": title, "message": message}}
+            )
+            msg = "[SUCESSO] Notificação alterada."
+            
+        elif action == 'toggle':
+            nid = request.form.get('id')
+            notif = notifications_collection.find_one({"_id": ObjectId(nid)})
+            if notif:
+                notifications_collection.update_one(
+                    {"_id": ObjectId(nid)},
+                    {"$set": {"is_active": not notif.get("is_active", True)}}
+                )
+                msg = "[SUCESSO] Status de exibição alterado."
+                
+        elif action == 'delete':
+            nid = request.form.get('id')
+            notifications_collection.delete_one({"_id": ObjectId(nid)})
+            msg = "[SUCESSO] Notificação apagada da base de dados permanentemente."
+
+    edit_id = request.args.get('edit_id')
+    edit_notif = None
+    if edit_id:
+        edit_notif = notifications_collection.find_one({"_id": ObjectId(edit_id)})
+        
+    all_notifs = list(notifications_collection.find().sort("created_at", -1))
+    
+    return render_template_string(
+        NOTIFICATION_ADMIN_HTML,
+        notifications=all_notifs,
+        msg=msg,
+        edit_notif=edit_notif,
+        notification_component=NOTIFICATION_COMPONENT_HTML
+    )
+
+@app.route('/api/notifications', methods=['GET'])
+def api_get_notifications():
+    session_id = request.cookies.get('user_session_id')
+    user = get_or_create_user(session_id) if session_id else {}
+    read_nots = user.get('read_notifications', [])
+
+    notifs = list(notifications_collection.find({"is_active": True}).sort("created_at", -1))
+    
+    result = []
+    unread_count = 0
+    for n in notifs:
+        nid = str(n['_id'])
+        if nid not in read_nots:
+            unread_count += 1
+        result.append({
+            "id": nid,
+            "title": n['title'],
+            "message": n['message'],
+            "created_at": n['created_at'].isoformat() + "Z", # Formato ISO seguro para JS Date
+            "is_read": nid in read_nots
+        })
+    
+    return jsonify({"notifications": result, "unread_count": unread_count})
+
+@app.route('/api/notifications/read', methods=['POST'])
+def api_mark_notifications_read():
+    session_id = request.cookies.get('user_session_id')
+    if not session_id:
+        return jsonify({"success": False})
+    
+    data = request.json or {}
+    notif_ids = data.get('ids', [])
+    if notif_ids:
+        users_collection.update_one(
+            {"session_id": session_id},
+            {"$addToSet": {"read_notifications": {"$each": notif_ids}}}
+        )
+    return jsonify({"success": True})
 
 @app.route('/api/target', methods=['POST'])
 def get_target_info():
