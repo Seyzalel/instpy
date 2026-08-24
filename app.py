@@ -100,7 +100,7 @@ def bot_firewall():
         abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
 
 # ==========================================
-# CONFIGURAÇÃO DA INSTAGRAPI (BLINDADA CONTRA CHECKPOINT)
+# CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
 SESSION_ID = "53793198529%3A6EKv3WAyEIsVri%3A16%3AAYiMCI2zVwThR3ahG-a6dn8_ZL3slFIYSvOg-rDA-Q"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
@@ -129,42 +129,72 @@ def get_sticky_proxy(sessionid):
 
 def get_insta_client():
     """
-    Inicia o Instagrapi com Persistência de Device Settings (Dispositivo Fixo).
-    Impede que o Instagram exija verificação de e-mail por mudança arbitrária de fingerprints.
+    Inicia o Instagrapi com Persistência Definitiva de Cookies e Device Settings.
+    Evita bloqueios recuperando TODOS os cookies de segurança (mid, ig_did, csrftoken) e não apenas o sessionid.
     """
     global insta_client_singleton
     with insta_lock:
         if insta_client_singleton is None:
-            print("Inicializando sessão Instagrapi Blindada (Device Consistency)...")
+            print("[INSTAGRAPI] Inicializando sessão Blindada e Ultra-Profissional...")
             try:
                 cl = Client()
+                
+                # 1. Configurações de Rede e Stealth (Pacing)
+                cl.request_timeout = 20
+                cl.delay_range = [1, 3] # Atraso randomizado interno da biblioteca
                 sticky_proxy = get_sticky_proxy(SESSION_ID)
                 cl.set_proxy(sticky_proxy)
                 
-                # Tenta recuperar o setting do dispositivo do banco de dados para evitar re-fingerprinting
+                # 2. Busca configurações completas (Hardware + Cookies) salvas no banco
                 doc = client_settings_collection.find_one({"_id": "singleton_device_settings"})
-                if doc and "settings" in doc:
-                    try:
-                        cl.set_settings(doc["settings"])
-                        print("Device settings carregados do MongoDB com sucesso.")
-                    except Exception as ex_set:
-                        print(f"Aviso ao carregar settings do DB: {ex_set}")
-
-                # Realiza login por sessionid
-                cl.login_by_sessionid(SESSION_ID)
                 
-                # Salva os ajustes de device gerados/validados para garantir consistência permanente
-                current_settings = cl.get_settings()
-                client_settings_collection.update_one(
-                    {"_id": "singleton_device_settings"},
-                    {"$set": {"settings": current_settings, "updated_at": datetime.utcnow()}},
-                    upsert=True
-                )
+                # 3. Validação de Mismatch: Se o SESSION_ID no código mudar, a identidade deve ser renovada
+                if doc and "settings" in doc and doc.get("current_session_id") == SESSION_ID:
+                    print("[INSTAGRAPI] Sessão reconhecida. Restaurando cookies e hardware íntegros do banco (Stealth MAX)...")
+                    cl.set_settings(doc["settings"])
+                else:
+                    print("[INSTAGRAPI] Novo SESSION_ID detectado ou base zerada. Gerando identidade do zero...")
+                    # Reiniciamos o client para garantir que NENHUM resíduo fique
+                    cl = Client()
+                    cl.request_timeout = 20
+                    cl.delay_range = [1, 3]
+                    cl.set_proxy(sticky_proxy)
+                    
+                    # Definindo locale idêntico a um dispositivo local legítimo
+                    cl.locale = 'pt_BR'
+                    cl.timezone_offset = -10800 # UTC-3 (Brasil)
+                    
+                    # Realiza login usando o novo SESSION_ID
+                    cl.login_by_sessionid(SESSION_ID)
+                    
+                    # EXTREMAMENTE IMPORTANTE: Uma requisição inofensiva e isolada apenas para forçar 
+                    # o Instagram a preencher os cookies complementares (mid, ig_did, csrftoken) do header.
+                    # Utilizando ESTRITAMENTE a mesma rota que buscamos perfis, obedecendo a restrição de uso.
+                    try:
+                        print("[INSTAGRAPI] Harmonizando cookies de segurança de forma limpa...")
+                        cl.user_info_by_username("instagram")
+                    except Exception as e:
+                        print(f"[INSTAGRAPI] Aviso na harmonização inicial: {e}")
+                    
+                    # Salva tudo perfeitamente mapeado no banco de dados
+                    client_settings_collection.update_one(
+                        {"_id": "singleton_device_settings"},
+                        {
+                            "$set": {
+                                "settings": cl.get_settings(), 
+                                "current_session_id": SESSION_ID,
+                                "updated_at": datetime.utcnow()
+                            }
+                        },
+                        upsert=True
+                    )
+                    print("[INSTAGRAPI] Nova identidade hardware e cookies salva com sucesso no MongoDB.")
 
                 insta_client_singleton = cl
-                print("Instagrapi carregado, proxy fixado e device fingerprint estabilizado com sucesso.")
+                print("[INSTAGRAPI] Cliente estabilizado. Pronto EXCLUSIVAMENTE para extração de dados públicos.")
             except Exception as e:
-                print(f"Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
+                print(f"[INSTAGRAPI] Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
+                # Fallback de Emergência
                 cl = Client()
                 cl.set_proxy(PROXY_URL)
                 cl.login_by_sessionid(SESSION_ID)
@@ -2343,10 +2373,11 @@ def get_target_info():
         return jsonify(cached_db)
 
     try:
-        # Pausa humanizada de segurança para evitar rate limit de requisições paralelas
-        time.sleep(random.uniform(0.8, 1.6))
+        # Pacing humanizado mais alto (Jitter) para disfarçar a automação
+        time.sleep(random.uniform(1.2, 2.5))
         
         client_insta = get_insta_client()
+        # EXCLUSIVIDADE ABSOLUTA DA SOLUÇÃO: Apenas user_info_by_username é chamado
         user_info = client_insta.user_info_by_username(username)
         
         try:
@@ -2358,7 +2389,7 @@ def get_target_info():
                 "data_hora": datetime.utcnow()
             })
         except Exception as db_err:
-            print(f"Erro db: {db_err}")
+            pass
             
         result_data = {
             "username": user_info.username,
@@ -2378,7 +2409,16 @@ def get_target_info():
         return jsonify(result_data)
         
     except Exception as e:
+        error_msg = str(e).lower()
         print(f"[INSTAGRAPI ERRO DE BUSCA] {e}")
+        
+        # Destruidor de Singleton: Se a sessão for corrompida por Challenge, force a re-inicialização total no próximo passo.
+        if "login_required" in error_msg or "challenge_required" in error_msg or "feedback_required" in error_msg:
+            global insta_client_singleton
+            with insta_lock:
+                insta_client_singleton = None
+                print("[INSTAGRAPI] Sessão invalidada pela segurança do IG. Singleton derrubado para tentar reconstrução posterior.")
+
         try:
             activities_collection.insert_one({
                 "session_id": session_id,
@@ -2389,7 +2429,7 @@ def get_target_info():
             })
         except:
             pass
-        return jsonify({"error": "Usuário não encontrado ou protegido por privacidade."}), 404
+        return jsonify({"error": "Usuário não encontrado ou protegido por privacidade extrema."}), 404
 
 @app.route('/api/check_eligibility', methods=['GET'])
 def check_eligibility():
