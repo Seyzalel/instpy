@@ -48,7 +48,7 @@ except Exception as e:
 # ==========================================
 CIRCUIT_BREAKER_LOCKED = False
 CIRCUIT_BREAKER_TIME = 0
-CIRCUIT_BREAKER_COOLDOWN = 1800 # 30 Minutos (Em segundos) de bloqueio total de proxy após queda da conta
+CIRCUIT_BREAKER_COOLDOWN = 2065 # 30 Minutos (Em segundos) de bloqueio total de proxy após queda da conta
 
 # ==========================================
 # CACHE EM MEMÓRIA RAM (ECONOMIA MÁXIMA)
@@ -109,8 +109,8 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
-SESSION_ID = "53793198529%3A8QqJ25ZkWP5dkj%3A23%3AAYiJYz08v9tF_btqUFSwGP8lgDp8zp4m7JUm5BFhAQ"
-PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
+SESSION_ID = "53793198529%3AIdDpvaTMmzh3a9%3A28%3AAYjinl_Cs3qNhFFAldZvLkI1mqejxQKCxtaT0zIwww"
+PROXY_URL = "br.decodo.com:10001:spbdjmclc2:lS8QnaqotlM9i3Y+g3"
 
 insta_client_singleton = None
 insta_lock = threading.Lock()
