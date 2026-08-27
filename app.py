@@ -44,6 +44,13 @@ except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
 
 # ==========================================
+# CIRCUIT BREAKER GLOBAL (PROTEÇÃO DEFINITIVA DE PROXY)
+# ==========================================
+CIRCUIT_BREAKER_LOCKED = False
+CIRCUIT_BREAKER_TIME = 0
+CIRCUIT_BREAKER_COOLDOWN = 1800 # 30 Minutos (Em segundos) de bloqueio total de proxy após queda da conta
+
+# ==========================================
 # CACHE EM MEMÓRIA RAM (ECONOMIA MÁXIMA)
 # ==========================================
 MEMORY_CACHE = {}
@@ -52,7 +59,7 @@ MEMORY_CACHE = {}
 # SISTEMA DE PROTEÇÃO ANTI-BOT E FIREWALL
 # ==========================================
 IP_HISTORY = defaultdict(list)
-RATE_LIMIT_MAX_REQ = 120
+RATE_LIMIT_MAX_REQ = 15 # CIRÚRGICO: Reduzido de 120 para 15 para impedir drenagem em loop
 RATE_LIMIT_WINDOW = 60
 BANNED_IPS = set()
 IP_BANS = {}
@@ -102,7 +109,7 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
-SESSION_ID = "53793198529%3ALOL6ghJH0ULfZm%3A7%3AAYilWHMfOpi-qgHecT-k890Zu0CeRxY-A62dzi0o3A"
+SESSION_ID = "53793198529%3A8QqJ25ZkWP5dkj%3A23%3AAYiJYz08v9tF_btqUFSwGP8lgDp8zp4m7JUm5BFhAQ"
 PROXY_URL = "http://user-spbdjmclc2-continent-eu:lS8QnaqotlM9i3Y+g3@gate.decodo.com:10001"
 
 insta_client_singleton = None
@@ -132,15 +139,22 @@ def get_insta_client():
     Inicia o Instagrapi com Persistência Definitiva de Cookies e Device Settings.
     Evita bloqueios recuperando TODOS os cookies de segurança (mid, ig_did, csrftoken) e não apenas o sessionid.
     """
-    global insta_client_singleton
+    global insta_client_singleton, CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
     with insta_lock:
+        # 1. VERIFICAÇÃO DO DISJUNTOR ANTES DE QUALQUER CONEXÃO
+        if CIRCUIT_BREAKER_LOCKED:
+            if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
+                raise Exception("CIRCUIT_BREAKER_ACTIVE")
+            else:
+                CIRCUIT_BREAKER_LOCKED = False
+
         if insta_client_singleton is None:
             print("[INSTAGRAPI] Inicializando sessão Blindada e Ultra-Profissional...")
             try:
                 cl = Client()
                 
                 # 1. Configurações de Rede e Stealth (Pacing)
-                cl.request_timeout = 20
+                cl.request_timeout = 10 # CIRÚRGICO: Reduzido de 20 para 10. Corta o download do payload HTML rápido.
                 cl.delay_range = [1, 3] # Atraso randomizado interno da biblioteca
                 sticky_proxy = get_sticky_proxy(SESSION_ID)
                 cl.set_proxy(sticky_proxy)
@@ -156,7 +170,7 @@ def get_insta_client():
                     print("[INSTAGRAPI] Novo SESSION_ID detectado ou base zerada. Gerando identidade do zero...")
                     # Reiniciamos o client para garantir que NENHUM resíduo fique
                     cl = Client()
-                    cl.request_timeout = 20
+                    cl.request_timeout = 10
                     cl.delay_range = [1, 3]
                     cl.set_proxy(sticky_proxy)
                     
@@ -173,32 +187,32 @@ def get_insta_client():
                     try:
                         print("[INSTAGRAPI] Harmonizando cookies de segurança de forma limpa...")
                         cl.user_info_by_username("instagram")
+                        
+                        # CIRÚRGICO: Só salva no banco se não der erro. Evita salvar sessão podre.
+                        client_settings_collection.update_one(
+                            {"_id": "singleton_device_settings"},
+                            {
+                                "$set": {
+                                    "settings": cl.get_settings(), 
+                                    "current_session_id": SESSION_ID,
+                                    "updated_at": datetime.utcnow()
+                                }
+                            },
+                            upsert=True
+                        )
+                        print("[INSTAGRAPI] Nova identidade hardware e cookies salva com sucesso no MongoDB.")
                     except Exception as e:
-                        print(f"[INSTAGRAPI] Aviso na harmonização inicial: {e}")
+                        print(f"[INSTAGRAPI FATAL] Aviso na harmonização inicial. Sessão queimada: {e}")
+                        CIRCUIT_BREAKER_LOCKED = True
+                        CIRCUIT_BREAKER_TIME = time.time()
+                        raise Exception(f"CIRCUIT_BREAKER_ACTIVE_ON_INIT: {e}")
                     
-                    # Salva tudo perfeitamente mapeado no banco de dados
-                    client_settings_collection.update_one(
-                        {"_id": "singleton_device_settings"},
-                        {
-                            "$set": {
-                                "settings": cl.get_settings(), 
-                                "current_session_id": SESSION_ID,
-                                "updated_at": datetime.utcnow()
-                            }
-                        },
-                        upsert=True
-                    )
-                    print("[INSTAGRAPI] Nova identidade hardware e cookies salva com sucesso no MongoDB.")
-
                 insta_client_singleton = cl
                 print("[INSTAGRAPI] Cliente estabilizado. Pronto EXCLUSIVAMENTE para extração de dados públicos.")
             except Exception as e:
                 print(f"[INSTAGRAPI] Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
-                # Fallback de Emergência
-                cl = Client()
-                cl.set_proxy(PROXY_URL)
-                cl.login_by_sessionid(SESSION_ID)
-                insta_client_singleton = cl
+                # CIRÚRGICO: Sem fallback cego que drena tráfego. Propaga o erro e bloqueia.
+                raise e
         return insta_client_singleton
 
 # ==========================================
@@ -2356,6 +2370,15 @@ def api_mark_notifications_read():
 
 @app.route('/api/target', methods=['POST'])
 def get_target_info():
+    global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME, insta_client_singleton
+    
+    # VERIFICAÇÃO IMEDIATA DO DISJUNTOR ANTES DE QUALQUER EXECUÇÃO
+    if CIRCUIT_BREAKER_LOCKED:
+        if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
+            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou a conta matriz temporariamente. Para evitar o consumo abusivo de proxy, as pesquisas foram interrompidas por 30 minutos. Tente novamente mais tarde."}), 403
+        else:
+            CIRCUIT_BREAKER_LOCKED = False
+            
     data = request.json
     target_input = data.get('target', '')
     session_id = request.cookies.get('user_session_id', 'sessao_nao_identificada')
@@ -2402,7 +2425,7 @@ def get_target_info():
                 "status": "sucesso",
                 "data_hora": datetime.utcnow()
             })
-        except Exception as db_err:
+        except Exception:
             pass
             
         result_data = {
@@ -2426,12 +2449,13 @@ def get_target_info():
         error_msg = str(e).lower()
         print(f"[INSTAGRAPI ERRO DE BUSCA] {e}")
         
-        # Destruidor de Singleton: Se a sessão for corrompida por Challenge, force a re-inicialização total no próximo passo.
-        if "login_required" in error_msg or "challenge_required" in error_msg or "feedback_required" in error_msg:
-            global insta_client_singleton
+        # O DISJUNTOR EM AÇÃO: Detectou bloqueio IG ou acionou localmente!
+        if "login_required" in error_msg or "challenge_required" in error_msg or "feedback_required" in error_msg or "circuit_breaker_active" in error_msg:
             with insta_lock:
                 insta_client_singleton = None
-                print("[INSTAGRAPI] Sessão invalidada pela segurança do IG. Singleton derrubado para tentar reconstrução posterior.")
+                CIRCUIT_BREAKER_LOCKED = True
+                CIRCUIT_BREAKER_TIME = time.time()
+                print("🚨 [CIRCUIT BREAKER ATIVADO] Bloqueio do IG Detectado. Loop de Proxy Neutralizado! Requisições futuras rejeitadas localmente sem tocar na Proxy.")
 
         try:
             activities_collection.insert_one({
@@ -2443,7 +2467,7 @@ def get_target_info():
             })
         except:
             pass
-        return jsonify({"error": "Usuário não encontrado ou protegido por privacidade extrema."}), 404
+        return jsonify({"error": "Usuário não encontrado ou a sessão primária caiu. Verifique sua conexão e tente novamente."}), 404
 
 @app.route('/api/check_eligibility', methods=['GET'])
 def check_eligibility():
