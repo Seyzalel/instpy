@@ -353,7 +353,7 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
-        value = 17.00
+        value = 28.00
     elif plan_requested == 'premium':
         value = 60.00
     else:
@@ -399,7 +399,8 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
 NOTIFICATION_COMPONENT_HTML = """
 <style>
     /* O top foi alterado para 55px para ficar logo abaixo da toolbar de 44px, não sobrepondo os textos dela */
-    .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 10000; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    /* Z-index ajustado para 999 para que não sobreponha outros modais da página principal */
+    .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 999; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .notif-badge { display: none; position: absolute; top: -4px; right: -6px; background: #ED4956; color: white; font-size: 10px; font-weight: 700; border-radius: 50%; padding: 2px 5px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.2); pointer-events: none; }
     .notif-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; background: rgba(0,0,0,0.6); z-index: 10001; flex-direction: column; justify-content: center; align-items: center; animation: fadeIn 0.2s ease-out; }
     .notif-modal-content { background: var(--bg-white, #FFFFFF); width: 90%; max-width: 380px; max-height: 80vh; border-radius: 12px; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.2); overflow: hidden; }
@@ -443,6 +444,13 @@ NOTIFICATION_COMPONENT_HTML = """
 <script>
     let unreadNotifIds = [];
 
+    function linkify(text) {
+        const urlRegex = /(https?:\\/\\/[^\\s]+)/g;
+        return text.replace(urlRegex, function(url) {
+            return `<a href="${url}" target="_blank" style="color: #0095F6; text-decoration: underline; text-decoration-thickness: 1px; cursor: pointer;">${url}</a>`;
+        });
+    }
+
     function formatRelativeTime(dateString) {
         const d = new Date(dateString);
         const now = new Date();
@@ -460,10 +468,10 @@ NOTIFICATION_COMPONENT_HTML = """
             return `${day}/${month}/${year}`;
         }
 
-        if (diffSecs < 60) return diffSecs <= 1 ? "há 1 segundo" : `há ${diffSecs} segundos`;
-        if (diffMins < 60) return diffMins === 1 ? "há 1 minuto" : `há ${diffMins} minutos`;
-        if (diffHours < 24) return diffHours === 1 ? "há 1 hora" : `há ${diffHours} horas`;
-        return diffDays === 1 ? "há 1 dia" : `há ${diffDays} dias`;
+        if (diffSecs < 60) return diffSecs <= 1 ? "há 1 segundo atrás" : `há ${diffSecs} segundos atrás`;
+        if (diffMins < 60) return diffMins === 1 ? "há 1 minuto atrás" : `há ${diffMins} minutos atrás`;
+        if (diffHours < 24) return diffHours === 1 ? "há 1 hora atrás" : `há ${diffHours} horas atrás`;
+        return diffDays === 1 ? "há 1 dia atrás" : `há ${diffDays} dias atrás`;
     }
 
     async function fetchNotifs() {
@@ -490,9 +498,8 @@ NOTIFICATION_COMPONENT_HTML = """
             container.innerHTML = data.notifications.map(n => `
                 <div class="notif-item ${n.is_read ? '' : 'unread'}">
                     <div class="notif-item-title">${n.title}</div>
-                    <div class="notif-item-msg">${n.message}</div>
+                    <div class="notif-item-msg">${linkify(n.message)}</div>
                     <div class="notif-item-time">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                         ${formatRelativeTime(n.created_at)}
                     </div>
                 </div>
@@ -1326,12 +1333,12 @@ HTML_TEMPLATE = """
             <div class="plan-card">
                 <div class="plan-card-header">
                     <div class="plan-name">Plano Pro</div>
-                    <div class="plan-price">R$ 17,00/mês</div>
+                    <div class="plan-price">R$ 28,00/mês</div>
                 </div>
                 <div class="plan-features">
                     - Gera até 5 tokens de senha por dia.<br>
                     - Acesso a contas de até 5.000 seguidores.<br>
-                    - Equivalente a R$ 0,57 centavos por dia.
+                    - Equivalente a R$ 0,93 centavos por dia.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('pro')">Atualizar para Pro</button>
             </div>
@@ -2509,7 +2516,7 @@ def checkout():
          return jsonify({"error": "CPF/CNPJ inválido."}), 400
     
     if plan_requested == 'pro':
-        valor_centavos = 1700
+        valor_centavos = 2800
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
         valor_centavos = 6000
