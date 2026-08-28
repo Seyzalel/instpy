@@ -16,7 +16,7 @@ import qrcode
 import hashlib
 import threading
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote
 from bson import ObjectId
 
@@ -127,8 +127,9 @@ def get_sticky_proxy(sessionid):
             user, pwd = credentials.split(':', 1)
             
             sid_hash = hashlib.md5(sessionid.encode()).hexdigest()[:8]
-            if "-session-" not in user:
-                sticky_user = f"{user}-session-{sid_hash}"
+            # CORREÇÃO CIRÚRGICA: Sublinhados duplos estritos para o provedor DataImpulse Proxy
+            if "__session_" not in user:
+                sticky_user = f"{user}__session_{sid_hash}"
                 return f"{protocol}://{sticky_user}:{pwd}@{address}"
     except Exception:
         pass
@@ -178,13 +179,14 @@ def get_insta_client():
                     cl.locale = 'pt_BR'
                     cl.timezone_offset = -10800 # UTC-3 (Brasil)
                     
-                    # Realiza login usando o novo SESSION_ID
-                    cl.login_by_sessionid(SESSION_ID)
-                    
-                    # EXTREMAMENTE IMPORTANTE: Uma requisição inofensiva e isolada apenas para forçar 
-                    # o Instagram a preencher os cookies complementares (mid, ig_did, csrftoken) do header.
-                    # Utilizando ESTRITAMENTE a mesma rota que buscamos perfis, obedecendo a restrição de uso.
+                    # CORREÇÃO CIRÚRGICA: O encapsulamento Try...Except agora protege também a etapa de login
                     try:
+                        # Realiza login usando o novo SESSION_ID
+                        cl.login_by_sessionid(SESSION_ID)
+                        
+                        # EXTREMAMENTE IMPORTANTE: Uma requisição inofensiva e isolada apenas para forçar 
+                        # o Instagram a preencher os cookies complementares (mid, ig_did, csrftoken) do header.
+                        # Utilizando ESTRITAMENTE a mesma rota que buscamos perfis, obedecendo a restrição de uso.
                         print("[INSTAGRAPI] Harmonizando cookies de segurança de forma limpa...")
                         cl.user_info_by_username("instagram")
                         
@@ -195,7 +197,7 @@ def get_insta_client():
                                 "$set": {
                                     "settings": cl.get_settings(), 
                                     "current_session_id": SESSION_ID,
-                                    "updated_at": datetime.utcnow()
+                                    "updated_at": datetime.now(timezone.utc)
                                 }
                             },
                             upsert=True
@@ -1604,7 +1606,8 @@ HTML_TEMPLATE = """
         }
 
         async function processCheckout() {
-            const cpfInput = document.getElementById('user-cpf').value.replace(/\D/g, '');
+            // CORREÇÃO CIRÚRGICA: Dupla barra para não gerar syntax warning no Python
+            const cpfInput = document.getElementById('user-cpf').value.replace(/\\D/g, '');
             
             if (cpfInput.length !== 11 && cpfInput.length !== 14) {
                 alert("Por favor, insira um CPF ou CNPJ válido contendo 11 ou 14 números.");
@@ -2151,7 +2154,7 @@ def serve_tutorial(filename):
     return send_from_directory(tutorial_dir, filename)
 
 def get_today_str():
-    return datetime.utcnow().strftime('%Y-%m-%d')
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
 def get_or_create_user(session_id):
     user = users_collection.find_one({"session_id": session_id})
@@ -2161,7 +2164,7 @@ def get_or_create_user(session_id):
             "plan": "basic",
             "tokens_used_today": {},
             "read_notifications": [], # Array para salvar o controle de leitura das notificações
-            "created_at": datetime.utcnow()
+            "created_at": datetime.now(timezone.utc)
         }
         users_collection.insert_one(user)
     return user
@@ -2197,7 +2200,7 @@ def index():
     response = make_response(rendered_html)
 
     if is_new_session and not is_prefetch:
-        expiration_date = datetime.now() + timedelta(days=3650)
+        expiration_date = datetime.now(timezone.utc) + timedelta(days=3650)
         response.set_cookie('user_session_id', session_id, expires=expiration_date)
 
     return response
@@ -2236,7 +2239,7 @@ def session_config():
             if custom_token:
                 config_collection.update_one(
                     {"session_id": session_id},
-                    {"$set": {"custom_token": custom_token, "updated_at": datetime.utcnow()}},
+                    {"$set": {"custom_token": custom_token, "updated_at": datetime.now(timezone.utc)}},
                     upsert=True
                 )
             else:
@@ -2293,7 +2296,7 @@ def notification_admin():
                 "title": title,
                 "message": message,
                 "is_active": True,
-                "created_at": datetime.utcnow()
+                "created_at": datetime.now(timezone.utc)
             })
             msg = "[SUCESSO] Nova notificação global enviada!"
             
@@ -2430,7 +2433,7 @@ def get_target_info():
                 "input_original": target_input,
                 "username_buscado": username,
                 "status": "sucesso",
-                "data_hora": datetime.utcnow()
+                "data_hora": datetime.now(timezone.utc)
             })
         except Exception:
             pass
@@ -2470,7 +2473,7 @@ def get_target_info():
                 "input_original": target_input,
                 "username_buscado": username,
                 "status": "erro_na_busca",
-                "data_hora": datetime.utcnow()
+                "data_hora": datetime.now(timezone.utc)
             })
         except:
             pass
@@ -2587,7 +2590,7 @@ def checkout():
         "user_agent": user_agent,
         "fbp_cookie": fbp,
         "fbc_cookie": fbc,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc)
     })
     
     return jsonify({
@@ -2640,7 +2643,7 @@ def webhook_pix_handler():
 
             payments_collection.update_one(
                 {"_id": payment_record["_id"]},
-                {"$set": {"status": internal_status, "updated_at": datetime.utcnow()}}
+                {"$set": {"status": internal_status, "updated_at": datetime.now(timezone.utc)}}
             )
 
             if internal_status == "COMPLETE":
@@ -2692,7 +2695,7 @@ def check_payment(transaction_id):
     
     payments_collection.update_one(
         {"transaction_id": transaction_id},
-        {"$set": {"status": status, "updated_at": datetime.utcnow()}}
+        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc)}}
     )
     
     if status == 'COMPLETE':
