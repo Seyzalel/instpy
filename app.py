@@ -1,4 +1,4 @@
-From flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
+from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 from instagrapi import Client
 from pymongo import MongoClient
