@@ -1,6 +1,6 @@
 Flask
 instagrapi
-requests
+Requests
 pymongo
 qrcode
 Pillow
