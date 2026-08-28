@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
+From flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 from instagrapi import Client
 from pymongo import MongoClient
@@ -110,7 +110,7 @@ def bot_firewall():
 # CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
 SESSION_ID = "53793198529%3AIdDpvaTMmzh3a9%3A28%3AAYjinl_Cs3qNhFFAldZvLkI1mqejxQKCxtaT0zIwww"
-PROXY_URL = "br.decodo.com:10001:spbdjmclc2:lS8QnaqotlM9i3Y+g3"
+PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"  # DATAIMPULSE PROXY (BRASIL FIXO)
 
 insta_client_singleton = None
 insta_lock = threading.Lock()
