@@ -1341,12 +1341,12 @@ HTML_TEMPLATE = """
             <div class="plan-card">
                 <div class="plan-card-header">
                     <div class="plan-name">Plano Pro</div>
-                    <div class="plan-price">R$ 28,00/mês</div>
+                    <div class="plan-price">R$ 50,00/2 meses</div>
                 </div>
                 <div class="plan-features">
                     Gera até 10 tokens de senha por dia.<br>
                     Acesse 10 contas por dia/até 5.000 seguidores.<br>
-                    Equivalente a R$ 0,93 centavos por dia.
+                    Equivalente a R$ 0,83 centavos por dia.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('pro')">Atualizar para Pro</button>
             </div>
@@ -1354,7 +1354,7 @@ HTML_TEMPLATE = """
             <div class="plan-card">
                 <div class="plan-card-header">
                     <div class="plan-name">Plano Premium</div>
-                    <div class="plan-price">R$ 60,00/mês</div>
+                    <div class="plan-price">R$ 79,00/4 meses</div>
                 </div>
                 <div class="plan-features">
                     Gera até 20 tokens de senha por dia.<br>
@@ -2611,10 +2611,10 @@ def checkout():
          return jsonify({"error": "CPF/CNPJ inválido."}), 400
     
     if plan_requested == 'pro':
-        valor_centavos = 2800
+        valor_centavos = 5000
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        valor_centavos = 6000
+        valor_centavos = 7900
         desc = "Plano Premium - 1 Mes"
     else:
         return jsonify({"error": "Plano invalido."}), 400
