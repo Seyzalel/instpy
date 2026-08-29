@@ -526,6 +526,12 @@ NOTIFICATION_COMPONENT_HTML = """
                 document.querySelectorAll('.notif-item.unread').forEach(el => {
                     setTimeout(() => el.classList.remove('unread'), 1500);
                 });
+                // Re-sync com o servidor para garantir consistência total
+                fetchNotifs();
+            }).catch(err => {
+                console.error("Erro ao marcar notificações como lidas", err);
+                // Mesmo se falhar, tenta re-sync
+                fetchNotifs();
             });
         }
     }
@@ -2401,6 +2407,36 @@ def api_get_notifications():
         })
     
     return jsonify({"notifications": result, "unread_count": unread_count})
+
+@app.route('/api/notifications/read', methods=['POST'])
+def api_mark_notifications_read():
+    """Marca as notificações como lidas para o usuário da sessão."""
+    session_id = request.cookies.get('user_session_id')
+    if not session_id:
+        return jsonify({"error": "Sessão não identificada"}), 400
+
+    data = request.get_json(silent=True) or {}
+    ids = data.get('ids', [])
+    if not isinstance(ids, list):
+        return jsonify({"error": "IDs inválidos"}), 400
+
+    user = get_or_create_user(session_id)
+    current_read = user.get('read_notifications', [])
+    
+    # Adiciona os novos IDs, evitando duplicatas
+    updated = False
+    for nid in ids:
+        if nid not in current_read:
+            current_read.append(nid)
+            updated = True
+    
+    if updated:
+        users_collection.update_one(
+            {"session_id": session_id},
+            {"$set": {"read_notifications": current_read}}
+        )
+    
+    return jsonify({"success": True, "marked_read": len(ids)})
 
 
 def _apply_custom_stats(data_dict, sess_id):
