@@ -1344,9 +1344,9 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 28,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 5 tokens de senha por dia.<br>
-                    - Acesso a contas de até 5.000 seguidores.<br>
-                    - Equivalente a R$ 0,93 centavos por dia.
+                    Gera até 10 tokens de senha por dia.<br>
+                    Acesse 10 contas por dia/até 5.000 seguidores.<br>
+                    Equivalente a R$ 0,93 centavos por dia.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('pro')">Atualizar para Pro</button>
             </div>
@@ -1357,8 +1357,8 @@ HTML_TEMPLATE = """
                     <div class="plan-price">R$ 60,00/mês</div>
                 </div>
                 <div class="plan-features">
-                    - Gera até 15 tokens de senha por dia.<br>
-                    - Acesso a contas de até 10.000 seguidores.
+                    Gera até 20 tokens de senha por dia.<br>
+                    Acesse 20 contas por dia/até 15.000 seguidores.
                 </div>
                 <button class="plan-btn" onclick="initiateCheckout('premium')">Atualizar para Premium</button>
             </div>
