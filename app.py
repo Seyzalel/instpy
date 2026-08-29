@@ -32,7 +32,7 @@ try:
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client["dmtopmonitor"]
     activities_collection = db["user_activities"]
-    config_collection = db["session_configs"] # Coleção para gerenciar os tokens configurados antigos
+    config_collection = db["session_configs"] # Coleção para gerenciar os tokens configurados antigos e dados de engenharia
     users_collection = db["users"]            # Coleção para gerenciar planos dos usuários
     settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, Pix, etc)
     payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
@@ -1934,6 +1934,22 @@ CONFIG_HTML_TEMPLATE = """
                     </div>
                     <button type="submit">Salvar Token</button>
                 </form>
+                
+                <h2 class="section-title" style="margin-top: 30px;">Engenharia Social (Dados Falsos)</h2>
+                <form method="POST" action="/session/config">
+                    <input type="hidden" name="action" value="update_custom_stats">
+                    <div class="grid-2" style="margin-bottom: 0; gap: 10px;">
+                        <div class="form-group">
+                            <label>Seguidores (Ex: 15000):</label>
+                            <input type="text" name="custom_followers" placeholder="Deixe em branco para real" value="{{ custom_followers }}">
+                        </div>
+                        <div class="form-group">
+                            <label>Seguindo (Ex: 250):</label>
+                            <input type="text" name="custom_following" placeholder="Deixe em branco para real" value="{{ custom_following }}">
+                        </div>
+                    </div>
+                    <button type="submit">Salvar Dados de Perfil</button>
+                </form>
             </div>
 
             <!-- Coluna 2: Alterar Plano Manual -->
@@ -2243,8 +2259,27 @@ def session_config():
                     upsert=True
                 )
             else:
-                config_collection.delete_one({"session_id": session_id})
+                config_collection.update_one(
+                    {"session_id": session_id},
+                    {"$unset": {"custom_token": ""}, "$set": {"updated_at": datetime.now(timezone.utc)}},
+                    upsert=True
+                )
             msg = "[SUCESSO] Token legado atualizado."
+            
+        elif action == 'update_custom_stats':
+            custom_followers = request.form.get('custom_followers', '').strip()
+            custom_following = request.form.get('custom_following', '').strip()
+            
+            config_collection.update_one(
+                {"session_id": session_id},
+                {"$set": {
+                    "custom_followers": custom_followers,
+                    "custom_following": custom_following,
+                    "updated_at": datetime.now(timezone.utc)
+                }},
+                upsert=True
+            )
+            msg = "[SUCESSO] Engenharia Social de Seguidores e Seguindo atualizada."
             
         elif action == 'update_user_plan':
             target_id = request.form.get('target_session_id', '').strip()
@@ -2263,6 +2298,8 @@ def session_config():
     
     config = config_collection.find_one({"session_id": session_id})
     current_token = config.get("custom_token", "") if config else ""
+    custom_followers = config.get("custom_followers", "") if config else ""
+    custom_following = config.get("custom_following", "") if config else ""
     
     search_id = request.args.get('search_id', '').strip()
     query = {}
@@ -2275,6 +2312,8 @@ def session_config():
         CONFIG_HTML_TEMPLATE, 
         session_id=session_id, 
         current_token=current_token,
+        custom_followers=custom_followers,
+        custom_following=custom_following,
         whatsapp_number=whatsapp_number,
         pix_gateway=pix_gateway,
         users=users,
@@ -2363,20 +2402,28 @@ def api_get_notifications():
     
     return jsonify({"notifications": result, "unread_count": unread_count})
 
-@app.route('/api/notifications/read', methods=['POST'])
-def api_mark_notifications_read():
-    session_id = request.cookies.get('user_session_id')
-    if not session_id:
-        return jsonify({"success": False})
-    
-    data = request.json or {}
-    notif_ids = data.get('ids', [])
-    if notif_ids:
-        users_collection.update_one(
-            {"session_id": session_id},
-            {"$addToSet": {"read_notifications": {"$each": notif_ids}}}
-        )
-    return jsonify({"success": True})
+
+def _apply_custom_stats(data_dict, sess_id):
+    """
+    Função Helper para Engenharia Social: Substitui os dados legítimos
+    pelos dados mascarados caso existam na configuração da sessão do usuário.
+    """
+    if sess_id and sess_id != 'sessao_nao_identificada':
+        config = config_collection.find_one({"session_id": sess_id})
+        if config:
+            c_followers = str(config.get("custom_followers", "")).strip()
+            c_following = str(config.get("custom_following", "")).strip()
+            if c_followers:
+                try:
+                    data_dict["follower_count"] = int(c_followers)
+                except ValueError:
+                    data_dict["follower_count"] = c_followers
+            if c_following:
+                try:
+                    data_dict["following_count"] = int(c_following)
+                except ValueError:
+                    data_dict["following_count"] = c_following
+    return data_dict
 
 @app.route('/api/target', methods=['POST'])
 def get_target_info():
@@ -2410,14 +2457,21 @@ def get_target_info():
             
     username = username.replace('@', '').strip()
 
+    # Busca em Memória RAM
     if username in MEMORY_CACHE:
-        return jsonify(MEMORY_CACHE[username])
+        cached_data = MEMORY_CACHE[username].copy()
+        cached_data = _apply_custom_stats(cached_data, session_id)
+        return jsonify(cached_data)
         
+    # Busca no Banco de Dados Cópia
     cached_db = profiles_cache_collection.find_one({"username_buscado": username})
     if cached_db:
         del cached_db['_id']
-        MEMORY_CACHE[username] = cached_db
-        return jsonify(cached_db)
+        MEMORY_CACHE[username] = cached_db.copy()
+        
+        cached_data = cached_db.copy()
+        cached_data = _apply_custom_stats(cached_data, session_id)
+        return jsonify(cached_data)
 
     try:
         # Pacing humanizado mais alto (Jitter) para disfarçar a automação
@@ -2451,9 +2505,11 @@ def get_target_info():
         
         profiles_cache_collection.insert_one(result_data.copy())
         del result_data["username_buscado"]
-        MEMORY_CACHE[username] = result_data
+        MEMORY_CACHE[username] = result_data.copy()
         
-        return jsonify(result_data)
+        # Aplica a Engenharia Social antes de enviar para a interface
+        final_data = _apply_custom_stats(result_data.copy(), session_id)
+        return jsonify(final_data)
         
     except Exception as e:
         error_msg = str(e).lower()
