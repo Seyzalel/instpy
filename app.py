@@ -1369,7 +1369,7 @@ HTML_TEMPLATE = """
                     <div class="plan-price">Sob Consulta</div>
                 </div>
                 <div class="plan-features">
-                    Precisa de um plano profissional e personalizado para gerar token de acesso em contas verificadas ou com número de seguidores personalizado?
+                    Precisa de um plano com permissões avançadas e exlusivas para acessar contas maiores?
                 </div>
                 <button class="plan-btn whatsapp-btn" onclick="window.open('https://wa.me/{{ whatsapp_number }}', '_blank')">Entrar em Contato</button>
             </div>
