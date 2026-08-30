@@ -32,13 +32,13 @@ try:
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client["dmtopmonitor"]
     activities_collection = db["user_activities"]
-    config_collection = db["session_configs"] # Coleção para gerenciar os tokens configurados antigos e dados de engenharia
-    users_collection = db["users"]            # Coleção para gerenciar planos dos usuários
-    settings_collection = db["settings"]      # Coleção para configurações globais (WhatsApp, Pix, etc)
-    payments_collection = db["payments"]      # Coleção para gerenciar os pagamentos PIX
-    profiles_cache_collection = db["profiles_cache"] # Coleção para salvar banda de proxy
-    client_settings_collection = db["client_settings"] # Coleção para persistir o device fingerprint do Instagrapi
-    notifications_collection = db["notifications"] # Coleção do Sistema de Notificações
+    config_collection = db["session_configs"]
+    users_collection = db["users"]
+    settings_collection = db["settings"]
+    payments_collection = db["payments"]
+    profiles_cache_collection = db["profiles_cache"]
+    client_settings_collection = db["client_settings"]
+    notifications_collection = db["notifications"]
     print("Sistema integrado e conectado ao MongoDB com sucesso.")
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
@@ -48,10 +48,10 @@ except Exception as e:
 # ==========================================
 CIRCUIT_BREAKER_LOCKED = False
 CIRCUIT_BREAKER_TIME = 0
-CIRCUIT_BREAKER_COOLDOWN = 2065 # 30 Minutos (Em segundos) de bloqueio total de proxy após queda da conta
+CIRCUIT_BREAKER_COOLDOWN = 2065
 
 # ==========================================
-# CACHE EM MEMÓRIA RAM (ECONOMIA MÁXIMA)
+# CACHE EM MEMÓRIA RAM
 # ==========================================
 MEMORY_CACHE = {}
 
@@ -59,7 +59,7 @@ MEMORY_CACHE = {}
 # SISTEMA DE PROTEÇÃO ANTI-BOT E FIREWALL
 # ==========================================
 IP_HISTORY = defaultdict(list)
-RATE_LIMIT_MAX_REQ = 15 # CIRÚRGICO: Reduzido de 120 para 15 para impedir drenagem em loop
+RATE_LIMIT_MAX_REQ = 15
 RATE_LIMIT_WINDOW = 60
 BANNED_IPS = set()
 IP_BANS = {}
@@ -73,7 +73,6 @@ SUSPICIOUS_UA_REGEX = re.compile(
 
 @app.before_request
 def bot_firewall():
-    # NUNCA bloquear requisições de Webhook das adquirentes/gateways
     if request.path.startswith('/api/webhook'):
         return
 
@@ -85,14 +84,12 @@ def bot_firewall():
         
     now = time.time()
     
-    # Verifica se está banido
     if client_ip in IP_BANS:
         if now < IP_BANS[client_ip]:
             abort(403, description="Acesso negado: IP bloqueado por comportamento suspeito (Anti-Bot Ativado).")
         else:
             del IP_BANS[client_ip]
             
-    # Rate Limit
     IP_HISTORY[client_ip] = [timestamp for timestamp in IP_HISTORY[client_ip] if now - timestamp < RATE_LIMIT_WINDOW]
     IP_HISTORY[client_ip].append(now)
     
@@ -100,7 +97,6 @@ def bot_firewall():
         IP_BANS[client_ip] = now + BAN_TIME
         abort(429, description="Too Many Requests: Tráfego anômalo detectado. Proteção de proxy ativada.")
         
-    # Bloqueia bots conhecidos por User-Agent
     ua = request.headers.get('User-Agent', '')
     if SUSPICIOUS_UA_REGEX.search(ua):
         IP_BANS[client_ip] = now + BAN_TIME
@@ -109,17 +105,13 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
-SESSION_ID = "36894112352%3AieqOgpICxiUwPk%3A14%3AAYihWi9gABxEIxDoC-EyEdsIYU4wWaH_MibjnmkUyg"
-PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"  # DATAIMPULSE PROXY (BRASIL FIXO)
+SESSION_ID = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYhZEUfih7JAv7nPZfrWD-qbwUJ0iryBiS2nPOoUxA"
+PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"
 
 insta_client_singleton = None
 insta_lock = threading.Lock()
 
 def get_sticky_proxy(sessionid):
-    """
-    Força a rede proxy a manter o MESMO IP (Sticky IP) baseado na sessão.
-    Evita a rotação desnecessária de IPs que faz o Instagram baixar dados de segurança pesados.
-    """
     try:
         if "@" in PROXY_URL:
             protocol, rest = PROXY_URL.split('://')
@@ -127,7 +119,6 @@ def get_sticky_proxy(sessionid):
             user, pwd = credentials.split(':', 1)
             
             sid_hash = hashlib.md5(sessionid.encode()).hexdigest()[:8]
-            # CORREÇÃO CIRÚRGICA: Sublinhados duplos estritos para o provedor DataImpulse Proxy
             if "__session_" not in user:
                 sticky_user = f"{user}__session_{sid_hash}"
                 return f"{protocol}://{sticky_user}:{pwd}@{address}"
@@ -136,13 +127,8 @@ def get_sticky_proxy(sessionid):
     return PROXY_URL
 
 def get_insta_client():
-    """
-    Inicia o Instagrapi com Persistência Definitiva de Cookies e Device Settings.
-    Evita bloqueios recuperando TODOS os cookies de segurança (mid, ig_did, csrftoken) e não apenas o sessionid.
-    """
     global insta_client_singleton, CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
     with insta_lock:
-        # 1. VERIFICAÇÃO DO DISJUNTOR ANTES DE QUALQUER CONEXÃO
         if CIRCUIT_BREAKER_LOCKED:
             if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
                 raise Exception("CIRCUIT_BREAKER_ACTIVE")
@@ -154,43 +140,46 @@ def get_insta_client():
             try:
                 cl = Client()
                 
-                # 1. Configurações de Rede e Stealth (Pacing)
-                cl.request_timeout = 10 # CIRÚRGICO: Reduzido de 20 para 10. Corta o download do payload HTML rápido.
-                cl.delay_range = [1, 3] # Atraso randomizado interno da biblioteca
+                cl.request_timeout = 10
+                cl.delay_range = [2, 5]
                 sticky_proxy = get_sticky_proxy(SESSION_ID)
                 cl.set_proxy(sticky_proxy)
                 
-                # 2. Busca configurações completas (Hardware + Cookies) salvas no banco
                 doc = client_settings_collection.find_one({"_id": "singleton_device_settings"})
                 
-                # 3. Validação de Mismatch: Se o SESSION_ID no código mudar, a identidade deve ser renovada
                 if doc and "settings" in doc and doc.get("current_session_id") == SESSION_ID:
-                    print("[INSTAGRAPI] Sessão reconhecida. Restaurando cookies e hardware íntegros do banco (Stealth MAX)...")
+                    print("[INSTAGRAPI] Sessão reconhecida. Restaurando cookies e hardware íntegros do banco...")
                     cl.set_settings(doc["settings"])
                 else:
-                    print("[INSTAGRAPI] Novo SESSION_ID detectado ou base zerada. Gerando identidade do zero...")
-                    # Reiniciamos o client para garantir que NENHUM resíduo fique
+                    print("[INSTAGRAPI] Novo SESSION_ID detectado. Gerando identidade do zero com Fingerprint Fixo...")
                     cl = Client()
                     cl.request_timeout = 10
-                    cl.delay_range = [1, 3]
+                    cl.delay_range = [2, 5]
                     cl.set_proxy(sticky_proxy)
                     
-                    # Definindo locale idêntico a um dispositivo local legítimo
                     cl.locale = 'pt_BR'
-                    cl.timezone_offset = -10800 # UTC-3 (Brasil)
+                    cl.timezone_offset = -10800
                     
-                    # CORREÇÃO CIRÚRGICA: O encapsulamento Try...Except agora protege também a etapa de login
+                    # INJEÇÃO DEFINITIVA DE DEVICE PREMIUM (Evita ban imediato de Web -> Mobile Mismatch)
+                    cl.set_device({
+                        "app_version": "314.0.0.27.107",
+                        "android_version": "30",
+                        "android_release": "11.0",
+                        "dpi": "480dpi",
+                        "resolution": "1080x2340",
+                        "manufacturer": "samsung",
+                        "device": "SM-G991B",
+                        "model": "galaxy_s21",
+                        "cpu": "exynos2100"
+                    })
+                    
                     try:
-                        # Realiza login usando o novo SESSION_ID
                         cl.login_by_sessionid(SESSION_ID)
                         
-                        # EXTREMAMENTE IMPORTANTE: Uma requisição inofensiva e isolada apenas para forçar 
-                        # o Instagram a preencher os cookies complementares (mid, ig_did, csrftoken) do header.
-                        # Utilizando ESTRITAMENTE a mesma rota que buscamos perfis, obedecendo a restrição de uso.
+                        time.sleep(3) # Delay humano obrigatório
                         print("[INSTAGRAPI] Harmonizando cookies de segurança de forma limpa...")
                         cl.user_info_by_username("instagram")
                         
-                        # CIRÚRGICO: Só salva no banco se não der erro. Evita salvar sessão podre.
                         client_settings_collection.update_one(
                             {"_id": "singleton_device_settings"},
                             {
@@ -210,10 +199,9 @@ def get_insta_client():
                         raise Exception(f"CIRCUIT_BREAKER_ACTIVE_ON_INIT: {e}")
                     
                 insta_client_singleton = cl
-                print("[INSTAGRAPI] Cliente estabilizado. Pronto EXCLUSIVAMENTE para extração de dados públicos.")
+                print("[INSTAGRAPI] Cliente estabilizado.")
             except Exception as e:
                 print(f"[INSTAGRAPI] Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
-                # CIRÚRGICO: Sem fallback cego que drena tráfego. Propaga o erro e bloqueia.
                 raise e
         return insta_client_singleton
 
@@ -262,10 +250,10 @@ def checar_status_transacao_ggpix(transaction_id):
         return None
 
 # ==========================================
-# CONFIGURAÇÃO PARADISE PAGS API (BLINDADA E CORRIGIDA)
+# CONFIGURAÇÃO PARADISE PAGS API
 # ==========================================
 PARADISE_API_KEY = "sk_e33108ee283d27bbb9dc5954de0a1b9f3678fab039190efe2a55e57e93879903"
-PARADISE_BASE_URL = "https://oferta-processamento.org.ua/api/v1" # Documentação oficial atualizada
+PARADISE_BASE_URL = "https://oferta-processamento.org.ua/api/v1"
 
 def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
     url = f"{PARADISE_BASE_URL}/transaction.php"
@@ -289,7 +277,6 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
         }
     }
     
-    # 1. Correção drástica: Paradise PRECISA da URL de webhook explicitamente na criação.
     if webhook_url:
         payload["postback_url"] = webhook_url
         
@@ -303,9 +290,8 @@ def criar_cobranca_pix_paradise(valor_centavos, descricao, nome_pagador, cpf_pag
         
         if transaction_data.get("status") == "success":
             return {
-                # Normalizamos IDs para strings pois garante integridade nas consultas do banco
                 "id": str(transaction_data.get("transaction_id")), 
-                "externalId": transaction_data.get("id"), # A API da Paradise devolve sua reference no campo "id"
+                "externalId": transaction_data.get("id"),
                 "pixCopyPaste": transaction_data.get("qr_code")
             }
         else:
@@ -325,7 +311,6 @@ def checar_status_transacao_paradise(transaction_id):
         status_data = response.json()
         
         current_status = status_data.get("status")
-        # De acordo com a documentação Paradise: approved, pending, processing, under_review, failed, refunded, chargeback
         if current_status == "approved":
             return {"status": "COMPLETE"}
         elif current_status in ["failed", "refunded", "chargeback"]:
@@ -343,7 +328,7 @@ def get_active_gateway():
     settings = settings_collection.find_one({"_id": "global_config"})
     if settings and "pix_gateway" in settings:
         return settings["pix_gateway"]
-    return "ggpix" # Default inicial
+    return "ggpix"
 
 # ==========================================
 # CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
@@ -396,12 +381,10 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
 # ==========================================
-# COMPONENTE DE NOTIFICAÇÃO (APENAS PÁGINA PRINCIPAL)
+# COMPONENTE DE NOTIFICAÇÃO
 # ==========================================
 NOTIFICATION_COMPONENT_HTML = """
 <style>
-    /* O top foi alterado para 55px para ficar logo abaixo da toolbar de 44px, não sobrepondo os textos dela */
-    /* Z-index ajustado para 999 para que não sobreponha outros modais da página principal */
     .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 999; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .notif-badge { display: none; position: absolute; top: -4px; right: -6px; background: #ED4956; color: white; font-size: 10px; font-weight: 700; border-radius: 50%; padding: 2px 5px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.2); pointer-events: none; }
     .notif-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; background: rgba(0,0,0,0.6); z-index: 10001; flex-direction: column; justify-content: center; align-items: center; animation: fadeIn 0.2s ease-out; }
@@ -522,15 +505,12 @@ NOTIFICATION_COMPONENT_HTML = """
             }).then(() => {
                 document.getElementById('global-notif-badge').style.display = 'none';
                 unreadNotifIds = [];
-                // Remove visual unread class smoothly
                 document.querySelectorAll('.notif-item.unread').forEach(el => {
                     setTimeout(() => el.classList.remove('unread'), 1500);
                 });
-                // Re-sync com o servidor para garantir consistência total
                 fetchNotifs();
             }).catch(err => {
                 console.error("Erro ao marcar notificações como lidas", err);
-                // Mesmo se falhar, tenta re-sync
                 fetchNotifs();
             });
         }
@@ -541,7 +521,7 @@ NOTIFICATION_COMPONENT_HTML = """
     }
 
     document.addEventListener("DOMContentLoaded", fetchNotifs);
-    setInterval(fetchNotifs, 60000); // refresh automático a cada 1 min
+    setInterval(fetchNotifs, 60000); 
 </script>
 """
 
@@ -1246,19 +1226,16 @@ HTML_TEMPLATE = """
 </head>
 <body>
 
-    <!-- Toolbar com ID de Sessão Permanente -->
     <div class="toolbar">
         <span class="toolbar-text">SESSÃO: {{ session_id }} | PLANO: {{ user_plan | upper }}</span>
     </div>
 
-    <!-- Area plana de captura de dados -->
     <div class="wrapper">
         <h1>Identificação de Usuário</h1>
         <input type="text" id="target-input" placeholder="Nome de usuário ou link" autocomplete="off" spellcheck="false">
         <button id="submit-btn" onclick="fetchData()">Avançar</button>
         <div id="error-msg"></div>
 
-        <!-- Explicação detalhada da injeção -->
         <div class="explanation-box">
             <h3 class="explanation-title">Como a injeção de senha funciona?</h3>
             <p class="explanation-text">
@@ -1283,7 +1260,6 @@ HTML_TEMPLATE = """
     </div>
     {% endif %}
 
-    <!-- Modal Fullscreen da Conta -->
     <div class="modal-overlay" id="modal">
         <span class="close-btn" onclick="closeModal()">&times;</span>
         <div class="profile-view">
@@ -1331,7 +1307,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Modal de Upgrade de Plano -->
     <div class="upgrade-modal-overlay" id="upgrade-modal">
         <div class="upgrade-modal-content">
             <span class="close-btn-inner" onclick="closeUpgradeModal()">&times;</span>
@@ -1380,12 +1355,10 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Modal de Pagamento Pix (Tela Cheia e Limpa) -->
     <div class="modal-overlay" id="payment-modal">
         <span class="close-btn" onclick="cancelPayment()">&times;</span>
         <div class="payment-view">
             
-            <!-- Etapa 1: Solicitar CPF -->
             <div id="cpf-step" style="width: 100%;">
                 <div class="plan-title" style="font-size: 18px; margin-bottom: 10px;">Dados de Pagamento</div>
                 <div class="plan-desc" style="margin-bottom: 20px;">Para processar seu PIX com segurança e garantir a aprovação instantânea junto ao Banco Central, informe seu CPF.</div>
@@ -1399,13 +1372,11 @@ HTML_TEMPLATE = """
                 <button class="plan-btn" style="padding: 14px; font-size: 15px;" onclick="processCheckout()">Gerar PIX Agora</button>
             </div>
 
-            <!-- Etapa 2: Loading de Conexão -->
             <div id="pix-loading" style="display: none; flex-direction: column; align-items: center; justify-content: center; padding: 40px 0; width: 100%;">
                 <div class="spinner"></div>
                 <div class="loading-dots" style="margin-top: 20px; font-size: 14px;">Conectando ao Banco Central</div>
             </div>
 
-            <!-- Etapa 3: Exibição do QR Code PIX -->
             <div id="pix-content" style="display: none; width: 100%;">
                 <div class="plan-title" style="font-size: 20px; margin-bottom: 8px;">Pagamento via PIX</div>
                 <div class="pix-trust-msg">Ativação instantânea após o pagamento.</div>
@@ -1439,7 +1410,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Modal de Sucesso -->
     <div class="success-modal-overlay" id="success-modal">
         <div class="success-modal-content">
             <div class="plan-title" style="color: #28a745;">[SUCESSO] Pagamento Confirmado!</div>
@@ -1612,7 +1582,6 @@ HTML_TEMPLATE = """
         }
 
         async function processCheckout() {
-            // CORREÇÃO CIRÚRGICA: Dupla barra para não gerar syntax warning no Python
             const cpfInput = document.getElementById('user-cpf').value.replace(/\\D/g, '');
             
             if (cpfInput.length !== 11 && cpfInput.length !== 14) {
@@ -1906,7 +1875,6 @@ CONFIG_HTML_TEMPLATE = """
         {% endif %}
 
         <div class="grid-2">
-            <!-- Coluna 1: Configuração Global e Gateway -->
             <div>
                 <h2 class="section-title">Configurações Globais (Integrações)</h2>
                 
@@ -1958,7 +1926,6 @@ CONFIG_HTML_TEMPLATE = """
                 </form>
             </div>
 
-            <!-- Coluna 2: Alterar Plano Manual -->
             <div>
                 <h2 class="section-title">Alterar Plano de Usuário</h2>
                 <form method="POST" action="/session/config">
@@ -2185,7 +2152,7 @@ def get_or_create_user(session_id):
             "session_id": session_id,
             "plan": "basic",
             "tokens_used_today": {},
-            "read_notifications": [], # Array para salvar o controle de leitura das notificações
+            "read_notifications": [],
             "created_at": datetime.now(timezone.utc)
         }
         users_collection.insert_one(user)
@@ -2402,7 +2369,7 @@ def api_get_notifications():
             "id": nid,
             "title": n['title'],
             "message": n['message'],
-            "created_at": n['created_at'].isoformat() + "Z", # Formato ISO seguro para JS Date
+            "created_at": n['created_at'].isoformat() + "Z",
             "is_read": nid in read_nots
         })
     
@@ -2410,7 +2377,6 @@ def api_get_notifications():
 
 @app.route('/api/notifications/read', methods=['POST'])
 def api_mark_notifications_read():
-    """Marca as notificações como lidas para o usuário da sessão."""
     session_id = request.cookies.get('user_session_id')
     if not session_id:
         return jsonify({"error": "Sessão não identificada"}), 400
@@ -2423,7 +2389,6 @@ def api_mark_notifications_read():
     user = get_or_create_user(session_id)
     current_read = user.get('read_notifications', [])
     
-    # Adiciona os novos IDs, evitando duplicatas
     updated = False
     for nid in ids:
         if nid not in current_read:
@@ -2440,10 +2405,6 @@ def api_mark_notifications_read():
 
 
 def _apply_custom_stats(data_dict, sess_id):
-    """
-    Função Helper para Engenharia Social: Substitui os dados legítimos
-    pelos dados mascarados caso existam na configuração da sessão do usuário.
-    """
     if sess_id and sess_id != 'sessao_nao_identificada':
         config = config_collection.find_one({"session_id": sess_id})
         if config:
@@ -2465,7 +2426,6 @@ def _apply_custom_stats(data_dict, sess_id):
 def get_target_info():
     global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME, insta_client_singleton
     
-    # VERIFICAÇÃO IMEDIATA DO DISJUNTOR ANTES DE QUALQUER EXECUÇÃO
     if CIRCUIT_BREAKER_LOCKED:
         if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
             return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou a conta matriz temporariamente. Para evitar o consumo abusivo de proxy, as pesquisas foram interrompidas por 30 minutos. Tente novamente mais tarde."}), 403
@@ -2493,13 +2453,11 @@ def get_target_info():
             
     username = username.replace('@', '').strip()
 
-    # Busca em Memória RAM
     if username in MEMORY_CACHE:
         cached_data = MEMORY_CACHE[username].copy()
         cached_data = _apply_custom_stats(cached_data, session_id)
         return jsonify(cached_data)
         
-    # Busca no Banco de Dados Cópia
     cached_db = profiles_cache_collection.find_one({"username_buscado": username})
     if cached_db:
         del cached_db['_id']
@@ -2510,11 +2468,9 @@ def get_target_info():
         return jsonify(cached_data)
 
     try:
-        # Pacing humanizado mais alto (Jitter) para disfarçar a automação
         time.sleep(random.uniform(1.2, 2.5))
         
         client_insta = get_insta_client()
-        # EXCLUSIVIDADE ABSOLUTA DA SOLUÇÃO: Apenas user_info_by_username é chamado
         user_info = client_insta.user_info_by_username(username)
         
         try:
@@ -2543,7 +2499,6 @@ def get_target_info():
         del result_data["username_buscado"]
         MEMORY_CACHE[username] = result_data.copy()
         
-        # Aplica a Engenharia Social antes de enviar para a interface
         final_data = _apply_custom_stats(result_data.copy(), session_id)
         return jsonify(final_data)
         
@@ -2551,7 +2506,6 @@ def get_target_info():
         error_msg = str(e).lower()
         print(f"[INSTAGRAPI ERRO DE BUSCA] {e}")
         
-        # O DISJUNTOR EM AÇÃO: Detectou bloqueio IG ou acionou localmente!
         if "login_required" in error_msg or "challenge_required" in error_msg or "feedback_required" in error_msg or "circuit_breaker_active" in error_msg:
             with insta_lock:
                 insta_client_singleton = None
@@ -2638,7 +2592,6 @@ def checkout():
     }
     
     if gateway == "paradise":
-        # Correção drástica implementada: passando a postback_url corretamente!
         pix_data = criar_cobranca_pix_paradise(
             valor_centavos, desc, payer_name, payer_cpf,
             webhook_url=webhook_url,
@@ -2704,7 +2657,6 @@ def webhook_pix_handler():
 
         print(f"[WEBHOOK RECEBIDO] Dados: {data}")
         
-        # Correção drástica de compatibilidade: Aceitando os IDs exatos da documentação Paradise
         transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("id") or "")
         external_id = str(data.get("externalId") or data.get("external_id") or "")
         status = data.get("status")
@@ -2712,12 +2664,10 @@ def webhook_pix_handler():
         if not transaction_id and not external_id:
             return jsonify({"status": "ignored", "error": "ID ausente no Payload"}), 400
 
-        # Buscando o registro de pagamento (Garante tipo Str, se for inteiro o fallback atuará logo após)
         payment_record = None
         if transaction_id:
             payment_record = payments_collection.find_one({"transaction_id": transaction_id})
         
-        # Se salvou como ID numérico sem querer na criação (Blindagem Extra)
         if not payment_record and transaction_id and transaction_id.isdigit():
             payment_record = payments_collection.find_one({"transaction_id": int(transaction_id)})
             
@@ -2725,7 +2675,6 @@ def webhook_pix_handler():
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
-            # Compatibilidade Multi-Gateway: Paradise responde com 'approved', GGPIX com 'COMPLETE' ou 'PAID'
             if status in ["COMPLETE", "approved", "PAID", "COMPLETED"]:
                 internal_status = "COMPLETE"
             elif status in ["failed", "refunded", "chargeback", "CANCELED"]:
