@@ -105,7 +105,7 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
 # ==========================================
-SESSION_ID = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYhZEUfih7JAv7nPZfrWD-qbwUJ0iryBiS2nPOoUxA"
+SESSION_ID = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYj6CLYR0iKPUTE1-UXlnH8DWslHxYo6J4Ayfr--EA"
 PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"
 
 insta_client_singleton = None
