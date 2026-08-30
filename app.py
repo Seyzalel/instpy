@@ -117,8 +117,9 @@ def get_sticky_proxy(identifier):
             user, pwd = credentials.split(':', 1)
             
             sid_hash = hashlib.md5(identifier.encode()).hexdigest()[:8]
-            if "__session_" not in user:
-                sticky_user = f"{user}__session_{sid_hash}"
+            if "__session__" not in user:
+                # Modificado para duplo underscore absoluto
+                sticky_user = f"{user}__session__{sid_hash}"
                 return f"{protocol}://{sticky_user}:{pwd}@{address}"
     except Exception:
         pass
@@ -133,16 +134,8 @@ def fetch_instagram_profile(username, session_identifier):
         else:
             CIRCUIT_BREAKER_LOCKED = False
 
-    url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    
-    headers = {
-        "x-ig-app-id": "936619743392459",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://www.instagram.com",
-        "Referer": f"https://www.instagram.com/{username}/",
-    }
+    # URL corrigida para web desktop (bypass anti-401 domain mismatch)
+    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
     
     sticky_proxy = get_sticky_proxy(session_identifier)
     proxies = {
@@ -150,9 +143,31 @@ def fetch_instagram_profile(username, session_identifier):
         "https": sticky_proxy
     }
     
+    # Prepara uma sessão para reter os cookies e realizar o handshake com o instagram
+    session = curl_requests.Session(impersonate="chrome", proxies=proxies)
+    
     try:
-        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy pegajoso...")
-        response = curl_requests.get(url, headers=headers, impersonate="chrome", proxies=proxies, timeout=12)
+        print(f"[CURL_CFFI] Iniciando pre-flight handshake para capturar cookies (Sessão: {session_identifier})...")
+        # Realiza uma requisição na página inicial silenciosa para resgatar os cookies
+        session.get("https://www.instagram.com/", timeout=12)
+        
+        # Extrai o csrftoken retornado
+        csrftoken = session.cookies.get("csrftoken", "")
+        
+        headers = {
+            "x-ig-app-id": "936619743392459",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin": "https://www.instagram.com",
+            "Referer": f"https://www.instagram.com/{username}/",
+            "x-csrftoken": csrftoken,
+            "x-ig-www-claim": "0",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+        
+        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy pegajoso (com validação anti-401)...")
+        response = session.get(url, headers=headers, timeout=12)
         
         if response.status_code == 200:
             data = response.json()
@@ -172,7 +187,8 @@ def fetch_instagram_profile(username, session_identifier):
     except Exception as e:
         print(f"[CURL_CFFI ERRO] Falha ao buscar '{username}': {e}")
         raise e
-
+    finally:
+        session.close()
 
 # ==========================================
 # CONFIGURAÇÃO GGPIXAPI
@@ -829,16 +845,23 @@ HTML_TEMPLATE = """
         }
 
         .token-btn {
-            background-color: #262626;
-            width: auto;
-            padding: 12px 20px;
-            font-size: 13px;
+            background-color: var(--ig-blue);
+            color: #FFFFFF;
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
             border-radius: 6px;
             margin-top: 10px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            touch-action: manipulation;
+            -webkit-appearance: none;
         }
 
         .token-btn:hover {
-            background-color: #000000;
+            background-color: var(--ig-blue-hover);
         }
 
         .terminal-log {
@@ -2437,7 +2460,7 @@ def get_target_info():
     try:
         time.sleep(random.uniform(1.2, 2.5))
         
-        # AQUI OCORRE A SUBSTITUIÇÃO DA CHAMADA INSTAGRAPI PARA CURL_CFFI
+        # AQUI OCORRE A SUBSTITUIÇÃO DA CHAMADA INSTAGRAPI PARA CURL_CFFI (AGORA COM PRE-FLIGHT E BYPASS)
         user_info = fetch_instagram_profile(username, session_id)
         
         try:
