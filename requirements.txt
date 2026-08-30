@@ -1,6 +1,7 @@
 Flask
-instagrapi
-Requests
+Werkzeug
+curl_cffi
 pymongo
+requests
 qrcode
 Pillow
