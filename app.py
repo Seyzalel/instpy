@@ -1426,7 +1426,8 @@ HTML_TEMPLATE = """
                 const data = await response.json();
 
                 if (response.ok) {
-                    document.getElementById('m-pic').src = data.profile_pic;
+                    // MUDANÇA DA PROXY IMPLEMENTADA AQUI
+                    document.getElementById('m-pic').src = '/api/proxy_image?url=' + encodeURIComponent(data.profile_pic);
                     document.getElementById('m-name').innerText = data.full_name + (data.is_verified ? " [Verificado]" : "");
                     document.getElementById('m-username').innerText = data.username;
                     document.getElementById('m-bio').innerText = data.biography || '';
@@ -2751,6 +2752,31 @@ def api_generate_token():
         token = ''.join(random.choice(caracteres) for _ in range(tamanho))
 
     return jsonify({"token": token})
+
+# ==========================================
+# NOVO ENDPOINT: PROXY DE IMAGEM PARA BYPASS DE CORS/ORIGEM
+# ==========================================
+@app.route('/api/proxy_image', methods=['GET'])
+def proxy_image():
+    image_url = request.args.get('url')
+    if not image_url:
+        return "URL missing", 400
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.instagram.com/"
+        }
+        
+        response = requests.get(image_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            content_type = response.headers.get('Content-Type', 'image/jpeg')
+            return make_response(response.content, 200, {'Content-Type': content_type})
+        else:
+            return "Error fetching image", response.status_code
+    except Exception as e:
+        print(f"[PROXY IMAGE ERRO] Falha ao baixar imagem: {e}")
+        return "Internal Error", 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
