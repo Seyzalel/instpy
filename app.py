@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template_string, make_response, redirect, abort, send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
-from instagrapi import Client
+from curl_cffi import requests as curl_requests
 from pymongo import MongoClient
 import re
 import os
@@ -103,22 +103,20 @@ def bot_firewall():
         abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
 
 # ==========================================
-# CONFIGURAÇÃO DA INSTAGRAPI (SOLUÇÃO DEFINITIVA BLINDADA)
+# CONFIGURAÇÃO CURL_CFFI (SUBSTITUIÇÃO DA INSTAGRAPI)
 # ==========================================
-SESSION_ID = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYj6CLYR0iKPUTE1-UXlnH8DWslHxYo6J4Ayfr--EA"
 PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"
+# Mantivemos a variável SESSION_ID apenas para o hash do sticky proxy, não há login.
+SESSION_ID_FOR_PROXY = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYj6CLYR0iKPUTE1-UXlnH8DWslHxYo6J4Ayfr--EA"
 
-insta_client_singleton = None
-insta_lock = threading.Lock()
-
-def get_sticky_proxy(sessionid):
+def get_sticky_proxy(identifier):
     try:
         if "@" in PROXY_URL:
             protocol, rest = PROXY_URL.split('://')
             credentials, address = rest.split('@')
             user, pwd = credentials.split(':', 1)
             
-            sid_hash = hashlib.md5(sessionid.encode()).hexdigest()[:8]
+            sid_hash = hashlib.md5(identifier.encode()).hexdigest()[:8]
             if "__session_" not in user:
                 sticky_user = f"{user}__session_{sid_hash}"
                 return f"{protocol}://{sticky_user}:{pwd}@{address}"
@@ -126,85 +124,55 @@ def get_sticky_proxy(sessionid):
         pass
     return PROXY_URL
 
-def get_insta_client():
-    global insta_client_singleton, CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
-    with insta_lock:
-        if CIRCUIT_BREAKER_LOCKED:
-            if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
-                raise Exception("CIRCUIT_BREAKER_ACTIVE")
-            else:
-                CIRCUIT_BREAKER_LOCKED = False
+def fetch_instagram_profile(username, session_identifier):
+    global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
+    
+    if CIRCUIT_BREAKER_LOCKED:
+        if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
+            raise Exception("CIRCUIT_BREAKER_ACTIVE")
+        else:
+            CIRCUIT_BREAKER_LOCKED = False
 
-        if insta_client_singleton is None:
-            print("[INSTAGRAPI] Inicializando sessão Blindada e Ultra-Profissional...")
-            try:
-                cl = Client()
-                
-                cl.request_timeout = 10
-                cl.delay_range = [2, 5]
-                sticky_proxy = get_sticky_proxy(SESSION_ID)
-                cl.set_proxy(sticky_proxy)
-                
-                doc = client_settings_collection.find_one({"_id": "singleton_device_settings"})
-                
-                if doc and "settings" in doc and doc.get("current_session_id") == SESSION_ID:
-                    print("[INSTAGRAPI] Sessão reconhecida. Restaurando cookies e hardware íntegros do banco...")
-                    cl.set_settings(doc["settings"])
-                else:
-                    print("[INSTAGRAPI] Novo SESSION_ID detectado. Gerando identidade do zero com Fingerprint Fixo...")
-                    cl = Client()
-                    cl.request_timeout = 10
-                    cl.delay_range = [2, 5]
-                    cl.set_proxy(sticky_proxy)
-                    
-                    cl.locale = 'pt_BR'
-                    cl.timezone_offset = -10800
-                    
-                    # INJEÇÃO DEFINITIVA DE DEVICE PREMIUM (Evita ban imediato de Web -> Mobile Mismatch)
-                    cl.set_device({
-                        "app_version": "314.0.0.27.107",
-                        "android_version": "30",
-                        "android_release": "11.0",
-                        "dpi": "480dpi",
-                        "resolution": "1080x2340",
-                        "manufacturer": "samsung",
-                        "device": "SM-G991B",
-                        "model": "galaxy_s21",
-                        "cpu": "exynos2100",
-                        "version_code": "3140027107"
-                    })
-                    
-                    try:
-                        cl.login_by_sessionid(SESSION_ID)
-                        
-                        time.sleep(3) # Delay humano obrigatório
-                        print("[INSTAGRAPI] Harmonizando cookies de segurança de forma limpa...")
-                        cl.user_info_by_username("instagram")
-                        
-                        client_settings_collection.update_one(
-                            {"_id": "singleton_device_settings"},
-                            {
-                                "$set": {
-                                    "settings": cl.get_settings(), 
-                                    "current_session_id": SESSION_ID,
-                                    "updated_at": datetime.now(timezone.utc)
-                                }
-                            },
-                            upsert=True
-                        )
-                        print("[INSTAGRAPI] Nova identidade hardware e cookies salva com sucesso no MongoDB.")
-                    except Exception as e:
-                        print(f"[INSTAGRAPI FATAL] Aviso na harmonização inicial. Sessão queimada: {e}")
-                        CIRCUIT_BREAKER_LOCKED = True
-                        CIRCUIT_BREAKER_TIME = time.time()
-                        raise Exception(f"CIRCUIT_BREAKER_ACTIVE_ON_INIT: {e}")
-                    
-                insta_client_singleton = cl
-                print("[INSTAGRAPI] Cliente estabilizado.")
-            except Exception as e:
-                print(f"[INSTAGRAPI] Erro crítico ao inicializar Instagrapi com Device Settings: {e}")
-                raise e
-        return insta_client_singleton
+    url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    
+    headers = {
+        "x-ig-app-id": "936619743392459",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Origin": "https://www.instagram.com",
+        "Referer": f"https://www.instagram.com/{username}/",
+    }
+    
+    sticky_proxy = get_sticky_proxy(session_identifier)
+    proxies = {
+        "http": sticky_proxy,
+        "https": sticky_proxy
+    }
+    
+    try:
+        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy pegajoso...")
+        response = curl_requests.get(url, headers=headers, impersonate="chrome", proxies=proxies, timeout=12)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if "data" in data and "user" in data["data"]:
+                return data["data"]["user"]
+            else:
+                raise Exception("JSON Response is missing user data structure.")
+        elif response.status_code == 404:
+            raise Exception("UserNotFound")
+        elif response.status_code == 429:
+            CIRCUIT_BREAKER_LOCKED = True
+            CIRCUIT_BREAKER_TIME = time.time()
+            raise Exception("TooManyRequests - Proxy bloqueado")
+        else:
+            raise Exception(f"HTTP Error {response.status_code}")
+            
+    except Exception as e:
+        print(f"[CURL_CFFI ERRO] Falha ao buscar '{username}': {e}")
+        raise e
+
 
 # ==========================================
 # CONFIGURAÇÃO GGPIXAPI
@@ -527,9 +495,8 @@ NOTIFICATION_COMPONENT_HTML = """
 """
 
 # ==========================================
-# TEMPLATES HTML
+# TEMPLATES HTML (MANTIDOS 100% INTACTOS)
 # ==========================================
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -1733,7 +1700,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# Frontend de Configuração da Sessão (ADMIN PANEL)
 CONFIG_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -1989,7 +1955,6 @@ CONFIG_HTML_TEMPLATE = """
 </html>
 """
 
-# Frontend de Notificações - Administração (Painel)
 NOTIFICATION_ADMIN_HTML = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -2425,11 +2390,11 @@ def _apply_custom_stats(data_dict, sess_id):
 
 @app.route('/api/target', methods=['POST'])
 def get_target_info():
-    global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME, insta_client_singleton
+    global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
     
     if CIRCUIT_BREAKER_LOCKED:
         if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
-            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou a conta matriz temporariamente. Para evitar o consumo abusivo de proxy, as pesquisas foram interrompidas por 30 minutos. Tente novamente mais tarde."}), 403
+            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou o acesso temporariamente. Aguarde alguns minutos."}), 403
         else:
             CIRCUIT_BREAKER_LOCKED = False
             
@@ -2471,8 +2436,8 @@ def get_target_info():
     try:
         time.sleep(random.uniform(1.2, 2.5))
         
-        client_insta = get_insta_client()
-        user_info = client_insta.user_info_by_username(username)
+        # AQUI OCORRE A SUBSTITUIÇÃO DA CHAMADA INSTAGRAPI PARA CURL_CFFI
+        user_info = fetch_instagram_profile(username, session_id)
         
         try:
             activities_collection.insert_one({
@@ -2486,13 +2451,13 @@ def get_target_info():
             pass
             
         result_data = {
-            "username": user_info.username,
-            "full_name": user_info.full_name,
-            "profile_pic": str(user_info.profile_pic_url),
-            "biography": getattr(user_info, 'biography', ''),
-            "follower_count": user_info.follower_count,
-            "following_count": user_info.following_count,
-            "is_verified": getattr(user_info, 'is_verified', False),
+            "username": user_info.get("username", username),
+            "full_name": user_info.get("full_name", ""),
+            "profile_pic": user_info.get("profile_pic_url_hd", user_info.get("profile_pic_url", "")),
+            "biography": user_info.get("biography", ""),
+            "follower_count": user_info.get("edge_followed_by", {}).get("count", 0),
+            "following_count": user_info.get("edge_follow", {}).get("count", 0),
+            "is_verified": user_info.get("is_verified", False),
             "username_buscado": username
         }
         
@@ -2504,15 +2469,14 @@ def get_target_info():
         return jsonify(final_data)
         
     except Exception as e:
-        error_msg = str(e).lower()
-        print(f"[INSTAGRAPI ERRO DE BUSCA] {e}")
+        error_msg = str(e)
+        print(f"[SCRAPER ERRO DE BUSCA] {error_msg}")
         
-        if "login_required" in error_msg or "challenge_required" in error_msg or "feedback_required" in error_msg or "circuit_breaker_active" in error_msg:
-            with insta_lock:
-                insta_client_singleton = None
-                CIRCUIT_BREAKER_LOCKED = True
-                CIRCUIT_BREAKER_TIME = time.time()
-                print("🚨 [CIRCUIT BREAKER ATIVADO] Bloqueio do IG Detectado. Loop de Proxy Neutralizado! Requisições futuras rejeitadas localmente sem tocar na Proxy.")
+        if "TooManyRequests" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg:
+             return jsonify({"error": "Muitas requisições simultâneas. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
+             
+        if "UserNotFound" in error_msg:
+             return jsonify({"error": "Usuário não encontrado. Verifique se o nome está correto."}), 404
 
         try:
             activities_collection.insert_one({
@@ -2524,7 +2488,7 @@ def get_target_info():
             })
         except:
             pass
-        return jsonify({"error": "Usuário não encontrado ou a sessão primária caiu. Verifique sua conexão e tente novamente."}), 404
+        return jsonify({"error": "Não foi possível resgatar os dados deste usuário no momento. Tente novamente mais tarde."}), 404
 
 @app.route('/api/check_eligibility', methods=['GET'])
 def check_eligibility():
