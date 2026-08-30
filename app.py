@@ -170,7 +170,8 @@ def get_insta_client():
                         "manufacturer": "samsung",
                         "device": "SM-G991B",
                         "model": "galaxy_s21",
-                        "cpu": "exynos2100"
+                        "cpu": "exynos2100",
+                        "version_code": "3140027107"
                     })
                     
                     try:
@@ -430,7 +431,7 @@ NOTIFICATION_COMPONENT_HTML = """
     let unreadNotifIds = [];
 
     function linkify(text) {
-        const urlRegex = /(https?:\\/\\/[^\\s]+)/g;
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
         return text.replace(urlRegex, function(url) {
             return `<a href="${url}" target="_blank" style="color: #0095F6; text-decoration: underline; text-decoration-thickness: 1px; cursor: pointer;">${url}</a>`;
         });
@@ -1582,7 +1583,7 @@ HTML_TEMPLATE = """
         }
 
         async function processCheckout() {
-            const cpfInput = document.getElementById('user-cpf').value.replace(/\\D/g, '');
+            const cpfInput = document.getElementById('user-cpf').value.replace(/\D/g, '');
             
             if (cpfInput.length !== 11 && cpfInput.length !== 14) {
                 alert("Por favor, insira um CPF ou CNPJ válido contendo 11 ou 14 números.");
