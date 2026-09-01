@@ -170,11 +170,36 @@ def fetch_instagram_profile(username, session_identifier):
         response = session.get(url, headers=headers, timeout=12)
         
         if response.status_code == 200:
-            data = response.json()
-            if "data" in data and "user" in data["data"]:
-                return data["data"]["user"]
+            try:
+                data = response.json()
+            except Exception:
+                raise Exception("A resposta do Instagram não é um JSON válido (Possível bloqueio).")
+                
+            # Identificação de armadilha do Instagram (200 OK mas exigindo login)
+            if data.get("require_login"):
+                CIRCUIT_BREAKER_LOCKED = True
+                CIRCUIT_BREAKER_TIME = time.time()
+                raise Exception("TooManyRequests - Proxy bloqueado (Require Login via 200 OK)")
+                
+            if data.get("status") == "fail":
+                raise Exception(f"Instagram API retornou falha estrutural: {data.get('message', 'Erro desconhecido')}")
+
+            user_data = None
+            if "data" in data and isinstance(data["data"], dict) and "user" in data["data"]:
+                user_data = data["data"]["user"]
+            elif "graphql" in data and isinstance(data["graphql"], dict) and "user" in data["graphql"]:
+                user_data = data["graphql"]["user"]
+                
+            if user_data:
+                return user_data
+            elif user_data is None and ("data" in data or "graphql" in data):
+                # Caso a chave 'user' exista mas seja nula, o usuário procurado não existe ou foi banido.
+                raise Exception("UserNotFound")
             else:
+                # Log de payload não mapeado para diagnóstico detalhado (Evita o erro cego no log)
+                print(f"[CURL_CFFI DEBUG] Estrutura JSON inesperada ao buscar '{username}': {str(data)[:600]}")
                 raise Exception("JSON Response is missing user data structure.")
+                
         elif response.status_code == 404:
             raise Exception("UserNotFound")
         elif response.status_code == 429:
@@ -2401,7 +2426,7 @@ def get_target_info():
     
     if CIRCUIT_BREAKER_LOCKED:
         if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
-            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou o acesso temporariamente. Aguarde alguns minutos."}), 403
+            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou o acesso temporariamente. Aguarde alguns minutos."}), 429
         else:
             CIRCUIT_BREAKER_LOCKED = False
             
@@ -2483,7 +2508,7 @@ def get_target_info():
              return jsonify({"error": "Muitas requisições simultâneas. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
              
         if "UserNotFound" in error_msg:
-             return jsonify({"error": "Usuário não encontrado. Verifique se o nome está correto."}), 404
+             return jsonify({"error": "Usuário não encontrado. Verifique se o nome está correto e se a conta é aberta."}), 404
 
         try:
             activities_collection.insert_one({
