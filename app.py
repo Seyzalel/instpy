@@ -105,20 +105,23 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO CURL_CFFI (SUBSTITUIÇÃO DA INSTAGRAPI)
 # ==========================================
-PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:10000"
-# Mantivemos a variável SESSION_ID apenas para o hash do sticky proxy, não há login.
-SESSION_ID_FOR_PROXY = "36894112352%3AkH9qq7hOdv4CoT%3A12%3AAYj6CLYR0iKPUTE1-UXlnH8DWslHxYo6J4Ayfr--EA"
+PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:823"
 
-def get_sticky_proxy(identifier):
+def get_sticky_proxy():
+    """
+    Gera uma sessão de proxy nova a cada chamada.
+    Isso garante que o IP mude a cada busca, contornando bloqueios 401 persistentes,
+    mas mantém o IP igual durante o pre-flight e o request final para não invalidar o CSRF.
+    """
     try:
         if "@" in PROXY_URL:
             protocol, rest = PROXY_URL.split('://')
             credentials, address = rest.split('@')
             user, pwd = credentials.split(':', 1)
             
-            sid_hash = hashlib.md5(identifier.encode()).hexdigest()[:8]
+            # Gera um hash aleatório a CADA requisição, forçando rotação real
+            sid_hash = uuid.uuid4().hex[:8]
             if "__session__" not in user:
-                # Modificado para duplo underscore absoluto
                 sticky_user = f"{user}__session__{sid_hash}"
                 return f"{protocol}://{sticky_user}:{pwd}@{address}"
     except Exception:
@@ -134,24 +137,21 @@ def fetch_instagram_profile(username, session_identifier):
         else:
             CIRCUIT_BREAKER_LOCKED = False
 
-    # URL corrigida para web desktop (bypass anti-401 domain mismatch)
     url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
     
-    sticky_proxy = get_sticky_proxy(session_identifier)
+    # Chama o proxy rotacionado aleatoriamente
+    sticky_proxy = get_sticky_proxy()
     proxies = {
         "http": sticky_proxy,
         "https": sticky_proxy
     }
     
-    # Prepara uma sessão para reter os cookies e realizar o handshake com o instagram
     session = curl_requests.Session(impersonate="chrome", proxies=proxies)
     
     try:
         print(f"[CURL_CFFI] Iniciando pre-flight handshake para capturar cookies (Sessão: {session_identifier})...")
-        # Realiza uma requisição na página inicial silenciosa para resgatar os cookies
         session.get("https://www.instagram.com/", timeout=12)
         
-        # Extrai o csrftoken retornado
         csrftoken = session.cookies.get("csrftoken", "")
         
         headers = {
@@ -166,7 +166,7 @@ def fetch_instagram_profile(username, session_identifier):
             "X-Requested-With": "XMLHttpRequest"
         }
         
-        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy pegajoso (com validação anti-401)...")
+        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy rotativo (com validação anti-401)...")
         response = session.get(url, headers=headers, timeout=12)
         
         if response.status_code == 200:
@@ -175,7 +175,6 @@ def fetch_instagram_profile(username, session_identifier):
             except Exception:
                 raise Exception("A resposta do Instagram não é um JSON válido (Possível bloqueio).")
                 
-            # Identificação de armadilha do Instagram (200 OK mas exigindo login)
             if data.get("require_login"):
                 CIRCUIT_BREAKER_LOCKED = True
                 CIRCUIT_BREAKER_TIME = time.time()
@@ -193,15 +192,15 @@ def fetch_instagram_profile(username, session_identifier):
             if user_data:
                 return user_data
             elif user_data is None and ("data" in data or "graphql" in data):
-                # Caso a chave 'user' exista mas seja nula, o usuário procurado não existe ou foi banido.
                 raise Exception("UserNotFound")
             else:
-                # Log de payload não mapeado para diagnóstico detalhado (Evita o erro cego no log)
                 print(f"[CURL_CFFI DEBUG] Estrutura JSON inesperada ao buscar '{username}': {str(data)[:600]}")
                 raise Exception("JSON Response is missing user data structure.")
                 
         elif response.status_code == 404:
             raise Exception("UserNotFound")
+        elif response.status_code == 401:
+            raise Exception("HTTP Error 401 - Acesso Não Autorizado pelo Proxy")
         elif response.status_code == 429:
             CIRCUIT_BREAKER_LOCKED = True
             CIRCUIT_BREAKER_TIME = time.time()
@@ -412,7 +411,7 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
 # ==========================================
 # COMPONENTE DE NOTIFICAÇÃO
 # ==========================================
-NOTIFICATION_COMPONENT_HTML = """
+NOTIFICATION_COMPONENT_HTML = r"""
 <style>
     .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 999; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     .notif-badge { display: none; position: absolute; top: -4px; right: -6px; background: #ED4956; color: white; font-size: 10px; font-weight: 700; border-radius: 50%; padding: 2px 5px; line-height: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.2); pointer-events: none; }
