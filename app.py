@@ -119,10 +119,24 @@ def fetch_instagram_profile(username, session_identifier):
         else:
             CIRCUIT_BREAKER_LOCKED = False
 
-    # MUDANÇA ESTRUTURAL: Abandono da API protegida por cookie e ataque direto à URL pública do perfil
-    url = f"https://www.instagram.com/{username}/"
+    url_profile = f"https://www.instagram.com/{username}/"
+    url_base = "https://www.instagram.com/"
     max_retries = 3
     
+    def parse_ig_number(val_str):
+        val = val_str.upper().replace(',', '.')
+        multiplier = 1
+        if 'K' in val or ' MIL' in val:
+            multiplier = 1000
+            val = val.replace('K', '').replace(' MIL', '').strip()
+        elif 'M' in val:
+            multiplier = 1000000
+            val = val.replace('M', '').strip()
+        try:
+            return int(float(val) * multiplier)
+        except:
+            return val_str
+
     for attempt in range(max_retries):
         sticky_proxy = get_sticky_proxy()
         proxies = {
@@ -133,10 +147,10 @@ def fetch_instagram_profile(username, session_identifier):
         session = curl_requests.Session(impersonate="chrome", proxies=proxies)
         
         try:
-            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - Extraindo HTML público de '{username}'...")
+            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - [Fase 1] Warm-up na Home (Sessão: {session_identifier})...")
             
             # Cabeçalhos blindados simulando um visitante humano no navegador padrão
-            headers = {
+            headers_base = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -150,7 +164,22 @@ def fetch_instagram_profile(username, session_identifier):
                 "Sec-Ch-Ua-Platform": '"Windows"'
             }
             
-            response = session.get(url, headers=headers, timeout=15)
+            try:
+                # Simulando entrada limpa no site para ganhar cookies de sessão válidos
+                session.get(url_base, headers=headers_base, timeout=15)
+            except Exception as e:
+                print(f"[CURL_CFFI AVISO] Warm-up falhou, mas prosseguindo: {e}")
+                
+            # Simulando tempo de tela humana (Evita Trigger de Bot Rápido)
+            time.sleep(random.uniform(0.8, 1.8))
+            
+            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - [Fase 2] Extraindo HTML de '{username}'...")
+            
+            headers_profile = headers_base.copy()
+            headers_profile["Sec-Fetch-Site"] = "same-origin"
+            headers_profile["Referer"] = "https://www.instagram.com/"
+            
+            response = session.get(url_profile, headers=headers_profile, timeout=15)
             
             if response.status_code == 200:
                 html_content = response.text
@@ -159,67 +188,89 @@ def fetch_instagram_profile(username, session_identifier):
                 if "Page Not Found" in html_content or "Página não encontrada" in html_content:
                     raise Exception("UserNotFound")
                     
-                # Verifica se o Instagram entregou a tela de login em vez do perfil
-                if '<title>Instagram</title>' in html_content and 'edge_followed_by' not in html_content:
-                    raise Exception("REQUIRE_LOGIN_BLOCK - WAF Forçou a tela de login (Rotacionar IP)")
-                    
-                # =========================================
-                # EXTRATOR REGEX CIRÚRGICO DE JSON EMBUTIDO
-                # =========================================
                 biography = ""
-                bio_match = re.search(r'"biography"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
-                if bio_match:
-                    bio_raw = bio_match.group(1)
-                    try:
-                        biography = bio_raw.encode('utf-8').decode('unicode_escape')
-                    except:
-                        biography = bio_raw
-                        
                 follower_count = 0
-                follower_match = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
-                if not follower_match:
-                    follower_match = re.search(r'"follower_count"\s*:\s*(\d+)', html_content)
-                if follower_match:
-                    follower_count = int(follower_match.group(1))
-                    
                 following_count = 0
-                following_match = re.search(r'"edge_follow"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
-                if not following_match:
-                    following_match = re.search(r'"following_count"\s*:\s*(\d+)', html_content)
-                if following_match:
-                    following_count = int(following_match.group(1))
-                    
                 full_name = ""
-                name_match = re.search(r'"full_name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
-                if name_match:
-                    name_raw = name_match.group(1)
-                    try:
-                        full_name = name_raw.encode('utf-8').decode('unicode_escape')
-                    except:
-                        full_name = name_raw
-                        
                 profile_pic = ""
+                is_verified = False
+                success_json = False
+                
+                # =========================================
+                # CAMADA A: EXTRATOR REGEX CIRÚRGICO DE JSON
+                # =========================================
                 pic_match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
                 if not pic_match:
                     pic_match = re.search(r'"profile_pic_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                    
                 if pic_match:
+                    success_json = True
                     pic_raw = pic_match.group(1)
                     profile_pic = pic_raw.replace("\\/", "/")
-                    try:
-                        profile_pic = profile_pic.encode('utf-8').decode('unicode_escape')
-                    except:
-                        pass
+                    try: profile_pic = profile_pic.encode('utf-8').decode('unicode_escape')
+                    except: pass
                         
-                is_verified = False
-                verif_match = re.search(r'"is_verified"\s*:\s*(true|false)', html_content)
-                if verif_match and verif_match.group(1) == 'true':
-                    is_verified = True
+                    bio_match = re.search(r'"biography"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                    if bio_match:
+                        try: biography = bio_match.group(1).encode('utf-8').decode('unicode_escape')
+                        except: biography = bio_match.group(1)
+                            
+                    follower_match = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
+                    if not follower_match:
+                        follower_match = re.search(r'"follower_count"\s*:\s*(\d+)', html_content)
+                    if follower_match:
+                        follower_count = int(follower_match.group(1))
+                        
+                    following_match = re.search(r'"edge_follow"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
+                    if not following_match:
+                        following_match = re.search(r'"following_count"\s*:\s*(\d+)', html_content)
+                    if following_match:
+                        following_count = int(following_match.group(1))
+                        
+                    name_match = re.search(r'"full_name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                    if name_match:
+                        try: full_name = name_match.group(1).encode('utf-8').decode('unicode_escape')
+                        except: full_name = name_match.group(1)
+                            
+                    verif_match = re.search(r'"is_verified"\s*:\s*(true|false)', html_content)
+                    if verif_match and verif_match.group(1) == 'true':
+                        is_verified = True
+                
+                # =========================================
+                # CAMADA B: FAILSAFE (META TAGS OPENGRAPH)
+                # =========================================
+                # Acionado se o Instagram tentar esconder o perfil com tela de login
+                if not success_json:
+                    print(f"[CURL_CFFI] Bloqueio JSON detectado. Acionando Failsafe Camada B (OpenGraph Meta Tags)...")
                     
-                # Validação de Segurança da Extração
-                if not follower_match and not pic_match:
-                    raise Exception("HTML_PARSING_FAILED - O código do perfil veio vazio ou criptografado.")
+                    og_desc_match = re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html_content)
+                    og_image_match = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', html_content)
+                    og_title_match = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html_content)
                     
-                print(f"[CURL_CFFI] Sucesso Absoluto! Dados extraídos via HTML para '{username}'")
+                    if og_desc_match and og_image_match:
+                        desc_text = og_desc_match.group(1)
+                        
+                        f_match = re.search(r'([\d\.,]+(?:[KkMm]|\s*mil)?)\s+(?:Followers|seguidores)', desc_text, re.IGNORECASE)
+                        if f_match: follower_count = parse_ig_number(f_match.group(1))
+                            
+                        fw_match = re.search(r'([\d\.,]+(?:[KkMm]|\s*mil)?)\s+(?:Following|seguindo)', desc_text, re.IGNORECASE)
+                        if fw_match: following_count = parse_ig_number(fw_match.group(1))
+                        
+                        profile_pic = og_image_match.group(1).replace("&amp;", "&")
+                        
+                        if og_title_match:
+                            t_match = re.search(r'^(.+?)\s+\(@', og_title_match.group(1))
+                            if t_match: full_name = t_match.group(1).replace("&amp;", "&")
+                        
+                        if not full_name:
+                            name_desc_match = re.search(r'(?:from|de)\s+(.+?)\s+\(@', desc_text, re.IGNORECASE)
+                            if name_desc_match: full_name = name_desc_match.group(1).replace("&amp;", "&")
+                                
+                        print(f"[CURL_CFFI] Failsafe concluído com sucesso!")
+                    else:
+                        raise Exception("REQUIRE_LOGIN_BLOCK - WAF Forçou tela de login e Meta Tags falharam (Rotacionar IP)")
+                
+                print(f"[CURL_CFFI] Sucesso Absoluto! Dados extraídos de '{username}'")
                 
                 return {
                     "username": username,
@@ -243,7 +294,6 @@ def fetch_instagram_profile(username, session_identifier):
             err_msg = str(e)
             print(f"[CURL_CFFI AVISO] Falha na tentativa {attempt + 1} para '{username}': {err_msg}")
             
-            # Se for um erro 404 real, não gasta proxy tentando de novo
             if "UserNotFound" in err_msg:
                 session.close()
                 raise Exception("UserNotFound")
@@ -251,7 +301,6 @@ def fetch_instagram_profile(username, session_identifier):
             session.close()
             
             if attempt < max_retries - 1:
-                # Intervalo aleatório para parecer navegação manual antes do proxy rodar o IP
                 time.sleep(random.uniform(2.0, 5.0))
             else:
                 if "REQUIRE_LOGIN_BLOCK" in err_msg or "HTTP_BLOCK_" in err_msg or "HTML_PARSING_FAILED" in err_msg:
