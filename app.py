@@ -109,23 +109,13 @@ PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.
 
 def get_sticky_proxy():
     """
-    Gera uma sessão de proxy nova a cada chamada.
-    Isso garante que o IP mude a cada busca, contornando bloqueios 401 persistentes,
-    mas mantém o IP igual durante o pre-flight e o request final para não invalidar o CSRF.
+    Retorna a URL do proxy sem modificações.
+    A porta 823 rotaciona nativamente a cada nova conexão TCP.
+    A sessão do curl_cffi garante que a conexão TCP seja mantida viva (Keep-Alive)
+    durante o pre-flight e o request final, mantendo o IP estático na mesma requisição,
+    e rotacionando automaticamente na próxima busca.
+    Evita o erro 401 Unauthorized do provedor.
     """
-    try:
-        if "@" in PROXY_URL:
-            protocol, rest = PROXY_URL.split('://')
-            credentials, address = rest.split('@')
-            user, pwd = credentials.split(':', 1)
-            
-            # Gera um hash aleatório a CADA requisição, forçando rotação real
-            sid_hash = uuid.uuid4().hex[:8]
-            if "__session__" not in user:
-                sticky_user = f"{user}__session__{sid_hash}"
-                return f"{protocol}://{sticky_user}:{pwd}@{address}"
-    except Exception:
-        pass
     return PROXY_URL
 
 def fetch_instagram_profile(username, session_identifier):
@@ -139,7 +129,7 @@ def fetch_instagram_profile(username, session_identifier):
 
     url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
     
-    # Chama o proxy rotacionado aleatoriamente
+    # Chama o proxy nativo sem injeções
     sticky_proxy = get_sticky_proxy()
     proxies = {
         "http": sticky_proxy,
@@ -166,7 +156,7 @@ def fetch_instagram_profile(username, session_identifier):
             "X-Requested-With": "XMLHttpRequest"
         }
         
-        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy rotativo (com validação anti-401)...")
+        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy rotativo nativo (com validação anti-401)...")
         response = session.get(url, headers=headers, timeout=12)
         
         if response.status_code == 200:
@@ -1368,7 +1358,7 @@ HTML_TEMPLATE = """
                 <div class="plan-title" style="font-size: 18px; margin-bottom: 10px;">Confirmar Contratação</div>
                 <div class="plan-desc" style="margin-bottom: 20px;">
                     Você está prestes a contratar o <b>Plano <span id="plan-name-display"></span></b>.<br><br>
-                    Ao clicar no botão abaixo, será gerado automaticamente o seu Pix QR Code e o código Copia e Cola para pagamento imediato.
+                    Ao clicar no botão abaixo, será gerado automatically o seu Pix QR Code e o código Copia e Cola para pagamento imediato.
                 </div>
                 
                 <button class="plan-btn" style="padding: 14px; font-size: 15px;" onclick="processCheckout()">Gerar PIX Agora</button>
