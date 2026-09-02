@@ -137,6 +137,21 @@ def fetch_instagram_profile(username, session_identifier):
         except:
             return val_str
 
+    def clean_text(text):
+        """Esteriliza o texto decodificando emojis escapados e removendo surrogates isolados que cracham o DB"""
+        if not text: return ""
+        text = text.replace('\\/', '/')
+        try:
+            parsed = json.loads(f'"{text}"')
+            text = parsed
+        except:
+            try:
+                text = text.encode('utf-8').decode('unicode_escape')
+                text = text.encode('utf-16', 'surrogatepass').decode('utf-16')
+            except:
+                pass
+        return text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
+
     for attempt in range(max_retries):
         sticky_proxy = get_sticky_proxy()
         proxies = {
@@ -149,7 +164,6 @@ def fetch_instagram_profile(username, session_identifier):
         try:
             print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - [Fase 1] Warm-up na Home (Sessão: {session_identifier})...")
             
-            # Cabeçalhos blindados simulando um visitante humano no navegador padrão
             headers_base = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
@@ -165,12 +179,10 @@ def fetch_instagram_profile(username, session_identifier):
             }
             
             try:
-                # Simulando entrada limpa no site para ganhar cookies de sessão válidos
                 session.get(url_base, headers=headers_base, timeout=15)
             except Exception as e:
                 print(f"[CURL_CFFI AVISO] Warm-up falhou, mas prosseguindo: {e}")
                 
-            # Simulando tempo de tela humana (Evita Trigger de Bot Rápido)
             time.sleep(random.uniform(0.8, 1.8))
             
             print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - [Fase 2] Extraindo HTML de '{username}'...")
@@ -184,7 +196,6 @@ def fetch_instagram_profile(username, session_identifier):
             if response.status_code == 200:
                 html_content = response.text
                 
-                # Verifica se a página retornou um erro 404 disfarçado em HTML
                 if "Page Not Found" in html_content or "Página não encontrada" in html_content:
                     raise Exception("UserNotFound")
                     
@@ -205,15 +216,11 @@ def fetch_instagram_profile(username, session_identifier):
                     
                 if pic_match:
                     success_json = True
-                    pic_raw = pic_match.group(1)
-                    profile_pic = pic_raw.replace("\\/", "/")
-                    try: profile_pic = profile_pic.encode('utf-8').decode('unicode_escape')
-                    except: pass
+                    profile_pic = clean_text(pic_match.group(1))
                         
                     bio_match = re.search(r'"biography"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
                     if bio_match:
-                        try: biography = bio_match.group(1).encode('utf-8').decode('unicode_escape')
-                        except: biography = bio_match.group(1)
+                        biography = clean_text(bio_match.group(1))
                             
                     follower_match = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
                     if not follower_match:
@@ -229,8 +236,7 @@ def fetch_instagram_profile(username, session_identifier):
                         
                     name_match = re.search(r'"full_name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
                     if name_match:
-                        try: full_name = name_match.group(1).encode('utf-8').decode('unicode_escape')
-                        except: full_name = name_match.group(1)
+                        full_name = clean_text(name_match.group(1))
                             
                     verif_match = re.search(r'"is_verified"\s*:\s*(true|false)', html_content)
                     if verif_match and verif_match.group(1) == 'true':
@@ -239,7 +245,6 @@ def fetch_instagram_profile(username, session_identifier):
                 # =========================================
                 # CAMADA B: FAILSAFE (META TAGS OPENGRAPH)
                 # =========================================
-                # Acionado se o Instagram tentar esconder o perfil com tela de login
                 if not success_json:
                     print(f"[CURL_CFFI] Bloqueio JSON detectado. Acionando Failsafe Camada B (OpenGraph Meta Tags)...")
                     
@@ -256,15 +261,15 @@ def fetch_instagram_profile(username, session_identifier):
                         fw_match = re.search(r'([\d\.,]+(?:[KkMm]|\s*mil)?)\s+(?:Following|seguindo)', desc_text, re.IGNORECASE)
                         if fw_match: following_count = parse_ig_number(fw_match.group(1))
                         
-                        profile_pic = og_image_match.group(1).replace("&amp;", "&")
+                        profile_pic = clean_text(og_image_match.group(1).replace("&amp;", "&"))
                         
                         if og_title_match:
                             t_match = re.search(r'^(.+?)\s+\(@', og_title_match.group(1))
-                            if t_match: full_name = t_match.group(1).replace("&amp;", "&")
+                            if t_match: full_name = clean_text(t_match.group(1).replace("&amp;", "&"))
                         
                         if not full_name:
                             name_desc_match = re.search(r'(?:from|de)\s+(.+?)\s+\(@', desc_text, re.IGNORECASE)
-                            if name_desc_match: full_name = name_desc_match.group(1).replace("&amp;", "&")
+                            if name_desc_match: full_name = clean_text(name_desc_match.group(1).replace("&amp;", "&"))
                                 
                         print(f"[CURL_CFFI] Failsafe concluído com sucesso!")
                     else:
