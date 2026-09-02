@@ -113,7 +113,7 @@ def get_sticky_proxy():
     A porta 823 rotaciona nativamente a cada nova conexão TCP.
     A sessão do curl_cffi garante que a conexão TCP seja mantida viva (Keep-Alive)
     durante o pre-flight e o request final, mantendo o IP estático na mesma requisição,
-    e rotacionando automaticamente na próxima busca.
+    e rotacionando automaticamente na próxima busca ou em caso de Retry.
     Evita o erro 401 Unauthorized do provedor.
     """
     return PROXY_URL
@@ -129,80 +129,108 @@ def fetch_instagram_profile(username, session_identifier):
 
     url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
     
-    # Chama o proxy nativo sem injeções
-    sticky_proxy = get_sticky_proxy()
-    proxies = {
-        "http": sticky_proxy,
-        "https": sticky_proxy
-    }
+    # Sistema de Retry e Rotação Ativa de IP (Máximo de 3 tentativas)
+    max_retries = 3
     
-    session = curl_requests.Session(impersonate="chrome", proxies=proxies)
-    
-    try:
-        print(f"[CURL_CFFI] Iniciando pre-flight handshake para capturar cookies (Sessão: {session_identifier})...")
-        session.get("https://www.instagram.com/", timeout=12)
-        
-        csrftoken = session.cookies.get("csrftoken", "")
-        
-        headers = {
-            "x-ig-app-id": "936619743392459",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Origin": "https://www.instagram.com",
-            "Referer": f"https://www.instagram.com/{username}/",
-            "x-csrftoken": csrftoken,
-            "x-ig-www-claim": "0",
-            "X-Requested-With": "XMLHttpRequest"
+    for attempt in range(max_retries):
+        sticky_proxy = get_sticky_proxy()
+        proxies = {
+            "http": sticky_proxy,
+            "https": sticky_proxy
         }
         
-        print(f"[CURL_CFFI] Buscando dados de '{username}' via proxy rotativo nativo (com validação anti-401)...")
-        response = session.get(url, headers=headers, timeout=12)
+        session = curl_requests.Session(impersonate="chrome", proxies=proxies)
         
-        if response.status_code == 200:
-            try:
-                data = response.json()
-            except Exception:
-                raise Exception("A resposta do Instagram não é um JSON válido (Possível bloqueio).")
-                
-            if data.get("require_login"):
-                CIRCUIT_BREAKER_LOCKED = True
-                CIRCUIT_BREAKER_TIME = time.time()
-                raise Exception("TooManyRequests - Proxy bloqueado (Require Login via 200 OK)")
-                
-            if data.get("status") == "fail":
-                raise Exception(f"Instagram API retornou falha estrutural: {data.get('message', 'Erro desconhecido')}")
-
-            user_data = None
-            if "data" in data and isinstance(data["data"], dict) and "user" in data["data"]:
-                user_data = data["data"]["user"]
-            elif "graphql" in data and isinstance(data["graphql"], dict) and "user" in data["graphql"]:
-                user_data = data["graphql"]["user"]
-                
-            if user_data:
-                return user_data
-            elif user_data is None and ("data" in data or "graphql" in data):
-                raise Exception("UserNotFound")
-            else:
-                print(f"[CURL_CFFI DEBUG] Estrutura JSON inesperada ao buscar '{username}': {str(data)[:600]}")
-                raise Exception("JSON Response is missing user data structure.")
-                
-        elif response.status_code == 404:
-            raise Exception("UserNotFound")
-        elif response.status_code == 401:
-            raise Exception("HTTP Error 401 - Acesso Não Autorizado pelo Proxy")
-        elif response.status_code == 429:
-            CIRCUIT_BREAKER_LOCKED = True
-            CIRCUIT_BREAKER_TIME = time.time()
-            raise Exception("TooManyRequests - Proxy bloqueado")
-        else:
-            raise Exception(f"HTTP Error {response.status_code}")
+        try:
+            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - Iniciando pre-flight handshake (Sessão: {session_identifier})...")
+            session.get("https://www.instagram.com/", timeout=15)
             
-    except Exception as e:
-        print(f"[CURL_CFFI ERRO] Falha ao buscar '{username}': {e}")
-        raise e
-    finally:
-        session.close()
+            csrftoken = session.cookies.get("csrftoken", "")
+            
+            # Cabeçalhos avançados simulando navegação humana realista
+            headers = {
+                "x-ig-app-id": "936619743392459",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Origin": "https://www.instagram.com",
+                "Referer": f"https://www.instagram.com/{username}/",
+                "x-csrftoken": csrftoken,
+                "x-ig-www-claim": "0",
+                "X-Requested-With": "XMLHttpRequest",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"'
+            }
+            
+            print(f"[CURL_CFFI] Buscando dados de '{username}' com headers blindados...")
+            response = session.get(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except Exception:
+                    raise Exception("JSON_INVALID - A resposta do Instagram não é um JSON válido.")
+                    
+                if data.get("require_login"):
+                    raise Exception("REQUIRE_LOGIN_BLOCK - Require Login via 200 OK")
+                    
+                if data.get("status") == "fail":
+                    raise Exception(f"API_STRUCTURAL_FAIL: {data.get('message', 'Erro desconhecido')}")
+
+                user_data = None
+                if "data" in data and isinstance(data["data"], dict) and "user" in data["data"]:
+                    user_data = data["data"]["user"]
+                elif "graphql" in data and isinstance(data["graphql"], dict) and "user" in data["graphql"]:
+                    user_data = data["graphql"]["user"]
+                    
+                if user_data:
+                    return user_data
+                elif user_data is None and ("data" in data or "graphql" in data):
+                    raise Exception("UserNotFound")
+                else:
+                    print(f"[CURL_CFFI DEBUG] Estrutura JSON inesperada: {str(data)[:600]}")
+                    raise Exception("JSON_MISSING_USER_DATA")
+                    
+            elif response.status_code == 404:
+                raise Exception("UserNotFound")
+            elif response.status_code == 401:
+                raise Exception("HTTP_BLOCK_401 - Rejeitado pelo Instagram WAF (IP Sujo/Bloqueado)")
+            elif response.status_code == 429:
+                raise Exception("HTTP_BLOCK_429 - Rate Limit atingido")
+            else:
+                raise Exception(f"HTTP_ERROR_{response.status_code}")
+                
+        except Exception as e:
+            err_msg = str(e)
+            print(f"[CURL_CFFI AVISO] Falha na tentativa {attempt + 1} para '{username}': {err_msg}")
+            
+            # Se a conta realmente não existir, não há porque rotacionar o proxy
+            if "UserNotFound" in err_msg:
+                session.close()
+                raise Exception("UserNotFound")
+                
+            # Fecha a sessão atual para garantir rotação do proxy na próxima iteração
+            session.close()
+            
+            if attempt < max_retries - 1:
+                # Aguarda um tempo aleatório humano antes de forçar novo IP
+                time.sleep(random.uniform(2.0, 5.0))
+            else:
+                # Se falhar em todas as tentativas
+                if "REQUIRE_LOGIN_BLOCK" in err_msg or "HTTP_BLOCK_429" in err_msg:
+                    CIRCUIT_BREAKER_LOCKED = True
+                    CIRCUIT_BREAKER_TIME = time.time()
+                print(f"[CURL_CFFI ERRO FINAL] Falha definitiva ao buscar '{username}' após {max_retries} rotações de IP.")
+                raise Exception(err_msg)
+        finally:
+            try:
+                session.close()
+            except:
+                pass
 
 # ==========================================
 # GERADOR DE CPF VÁLIDO (BYPASS EXIGÊNCIA GATEWAY)
@@ -2493,7 +2521,7 @@ def get_target_info():
         error_msg = str(e)
         print(f"[SCRAPER ERRO DE BUSCA] {error_msg}")
         
-        if "TooManyRequests" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg:
+        if "HTTP_BLOCK_429" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg:
              return jsonify({"error": "Muitas requisições simultâneas. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
              
         if "UserNotFound" in error_msg:
