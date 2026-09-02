@@ -103,19 +103,11 @@ def bot_firewall():
         abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
 
 # ==========================================
-# CONFIGURAÇÃO CURL_CFFI (SUBSTITUIÇÃO DA INSTAGRAPI)
+# CONFIGURAÇÃO CURL_CFFI E SCRAPING HTML (O NOVO MOTOR)
 # ==========================================
 PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:823"
 
 def get_sticky_proxy():
-    """
-    Retorna a URL do proxy sem modificações.
-    A porta 823 rotaciona nativamente a cada nova conexão TCP.
-    A sessão do curl_cffi garante que a conexão TCP seja mantida viva (Keep-Alive)
-    durante o pre-flight e o request final, mantendo o IP estático na mesma requisição,
-    e rotacionando automaticamente na próxima busca ou em caso de Retry.
-    Evita o erro 401 Unauthorized do provedor.
-    """
     return PROXY_URL
 
 def fetch_instagram_profile(username, session_identifier):
@@ -127,9 +119,8 @@ def fetch_instagram_profile(username, session_identifier):
         else:
             CIRCUIT_BREAKER_LOCKED = False
 
-    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    
-    # Sistema de Retry e Rotação Ativa de IP (Máximo de 3 tentativas)
+    # MUDANÇA ESTRUTURAL: Abandono da API protegida por cookie e ataque direto à URL pública do perfil
+    url = f"https://www.instagram.com/{username}/"
     max_retries = 3
     
     for attempt in range(max_retries):
@@ -142,65 +133,109 @@ def fetch_instagram_profile(username, session_identifier):
         session = curl_requests.Session(impersonate="chrome", proxies=proxies)
         
         try:
-            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - Iniciando pre-flight handshake (Sessão: {session_identifier})...")
-            session.get("https://www.instagram.com/", timeout=15)
+            print(f"[CURL_CFFI] Tentativa {attempt + 1}/{max_retries} - Extraindo HTML público de '{username}'...")
             
-            csrftoken = session.cookies.get("csrftoken", "")
-            
-            # Cabeçalhos avançados simulando navegação humana realista
+            # Cabeçalhos blindados simulando um visitante humano no navegador padrão
             headers = {
-                "x-ig-app-id": "936619743392459",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "*/*",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Origin": "https://www.instagram.com",
-                "Referer": f"https://www.instagram.com/{username}/",
-                "x-csrftoken": csrftoken,
-                "x-ig-www-claim": "0",
-                "X-Requested-With": "XMLHttpRequest",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
                 "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
                 "Sec-Ch-Ua-Mobile": "?0",
                 "Sec-Ch-Ua-Platform": '"Windows"'
             }
             
-            print(f"[CURL_CFFI] Buscando dados de '{username}' com headers blindados...")
             response = session.get(url, headers=headers, timeout=15)
             
             if response.status_code == 200:
-                try:
-                    data = response.json()
-                except Exception:
-                    raise Exception("JSON_INVALID - A resposta do Instagram não é um JSON válido.")
-                    
-                if data.get("require_login"):
-                    raise Exception("REQUIRE_LOGIN_BLOCK - Require Login via 200 OK")
-                    
-                if data.get("status") == "fail":
-                    raise Exception(f"API_STRUCTURAL_FAIL: {data.get('message', 'Erro desconhecido')}")
-
-                user_data = None
-                if "data" in data and isinstance(data["data"], dict) and "user" in data["data"]:
-                    user_data = data["data"]["user"]
-                elif "graphql" in data and isinstance(data["graphql"], dict) and "user" in data["graphql"]:
-                    user_data = data["graphql"]["user"]
-                    
-                if user_data:
-                    return user_data
-                elif user_data is None and ("data" in data or "graphql" in data):
+                html_content = response.text
+                
+                # Verifica se a página retornou um erro 404 disfarçado em HTML
+                if "Page Not Found" in html_content or "Página não encontrada" in html_content:
                     raise Exception("UserNotFound")
-                else:
-                    print(f"[CURL_CFFI DEBUG] Estrutura JSON inesperada: {str(data)[:600]}")
-                    raise Exception("JSON_MISSING_USER_DATA")
                     
+                # Verifica se o Instagram entregou a tela de login em vez do perfil
+                if '<title>Instagram</title>' in html_content and 'edge_followed_by' not in html_content:
+                    raise Exception("REQUIRE_LOGIN_BLOCK - WAF Forçou a tela de login (Rotacionar IP)")
+                    
+                # =========================================
+                # EXTRATOR REGEX CIRÚRGICO DE JSON EMBUTIDO
+                # =========================================
+                biography = ""
+                bio_match = re.search(r'"biography"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                if bio_match:
+                    bio_raw = bio_match.group(1)
+                    try:
+                        biography = bio_raw.encode('utf-8').decode('unicode_escape')
+                    except:
+                        biography = bio_raw
+                        
+                follower_count = 0
+                follower_match = re.search(r'"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
+                if not follower_match:
+                    follower_match = re.search(r'"follower_count"\s*:\s*(\d+)', html_content)
+                if follower_match:
+                    follower_count = int(follower_match.group(1))
+                    
+                following_count = 0
+                following_match = re.search(r'"edge_follow"\s*:\s*\{\s*"count"\s*:\s*(\d+)\s*\}', html_content)
+                if not following_match:
+                    following_match = re.search(r'"following_count"\s*:\s*(\d+)', html_content)
+                if following_match:
+                    following_count = int(following_match.group(1))
+                    
+                full_name = ""
+                name_match = re.search(r'"full_name"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                if name_match:
+                    name_raw = name_match.group(1)
+                    try:
+                        full_name = name_raw.encode('utf-8').decode('unicode_escape')
+                    except:
+                        full_name = name_raw
+                        
+                profile_pic = ""
+                pic_match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                if not pic_match:
+                    pic_match = re.search(r'"profile_pic_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
+                if pic_match:
+                    pic_raw = pic_match.group(1)
+                    profile_pic = pic_raw.replace("\\/", "/")
+                    try:
+                        profile_pic = profile_pic.encode('utf-8').decode('unicode_escape')
+                    except:
+                        pass
+                        
+                is_verified = False
+                verif_match = re.search(r'"is_verified"\s*:\s*(true|false)', html_content)
+                if verif_match and verif_match.group(1) == 'true':
+                    is_verified = True
+                    
+                # Validação de Segurança da Extração
+                if not follower_match and not pic_match:
+                    raise Exception("HTML_PARSING_FAILED - O código do perfil veio vazio ou criptografado.")
+                    
+                print(f"[CURL_CFFI] Sucesso Absoluto! Dados extraídos via HTML para '{username}'")
+                
+                return {
+                    "username": username,
+                    "full_name": full_name,
+                    "profile_pic_url_hd": profile_pic,
+                    "profile_pic_url": profile_pic,
+                    "biography": biography,
+                    "edge_followed_by": {"count": follower_count},
+                    "edge_follow": {"count": following_count},
+                    "is_verified": is_verified
+                }
+                
             elif response.status_code == 404:
                 raise Exception("UserNotFound")
-            elif response.status_code == 401:
-                raise Exception("HTTP_BLOCK_401 - Rejeitado pelo Instagram WAF (IP Sujo/Bloqueado)")
-            elif response.status_code == 429:
-                raise Exception("HTTP_BLOCK_429 - Rate Limit atingido")
+            elif response.status_code in [401, 403, 429]:
+                raise Exception(f"HTTP_BLOCK_{response.status_code} - WAF bloqueou o acesso ao HTML público")
             else:
                 raise Exception(f"HTTP_ERROR_{response.status_code}")
                 
@@ -208,23 +243,21 @@ def fetch_instagram_profile(username, session_identifier):
             err_msg = str(e)
             print(f"[CURL_CFFI AVISO] Falha na tentativa {attempt + 1} para '{username}': {err_msg}")
             
-            # Se a conta realmente não existir, não há porque rotacionar o proxy
+            # Se for um erro 404 real, não gasta proxy tentando de novo
             if "UserNotFound" in err_msg:
                 session.close()
                 raise Exception("UserNotFound")
                 
-            # Fecha a sessão atual para garantir rotação do proxy na próxima iteração
             session.close()
             
             if attempt < max_retries - 1:
-                # Aguarda um tempo aleatório humano antes de forçar novo IP
+                # Intervalo aleatório para parecer navegação manual antes do proxy rodar o IP
                 time.sleep(random.uniform(2.0, 5.0))
             else:
-                # Se falhar em todas as tentativas
-                if "REQUIRE_LOGIN_BLOCK" in err_msg or "HTTP_BLOCK_429" in err_msg:
+                if "REQUIRE_LOGIN_BLOCK" in err_msg or "HTTP_BLOCK_" in err_msg or "HTML_PARSING_FAILED" in err_msg:
                     CIRCUIT_BREAKER_LOCKED = True
                     CIRCUIT_BREAKER_TIME = time.time()
-                print(f"[CURL_CFFI ERRO FINAL] Falha definitiva ao buscar '{username}' após {max_retries} rotações de IP.")
+                print(f"[CURL_CFFI ERRO FINAL] Esgotado! Falha definitiva ao buscar '{username}' após {max_retries} rotações.")
                 raise Exception(err_msg)
         finally:
             try:
@@ -2485,7 +2518,6 @@ def get_target_info():
     try:
         time.sleep(random.uniform(1.2, 2.5))
         
-        # AQUI OCORRE A SUBSTITUIÇÃO DA CHAMADA INSTAGRAPI PARA CURL_CFFI (AGORA COM PRE-FLIGHT E BYPASS)
         user_info = fetch_instagram_profile(username, session_id)
         
         try:
@@ -2521,8 +2553,8 @@ def get_target_info():
         error_msg = str(e)
         print(f"[SCRAPER ERRO DE BUSCA] {error_msg}")
         
-        if "HTTP_BLOCK_429" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg:
-             return jsonify({"error": "Muitas requisições simultâneas. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
+        if "HTTP_BLOCK" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg or "REQUIRE_LOGIN_BLOCK" in error_msg:
+             return jsonify({"error": "Muitas requisições simultâneas ou bloqueio da rede. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
              
         if "UserNotFound" in error_msg:
              return jsonify({"error": "Usuário não encontrado. Verifique se o nome está correto e se a conta é aberta."}), 404
