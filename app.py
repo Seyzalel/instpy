@@ -2234,6 +2234,75 @@ NOTIFICATION_ADMIN_HTML = """
 </html>
 """
 
+STATUS_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Status do Sistema</title>
+    <style>
+        body {
+            background-color: #FAFAFA;
+            color: #262626;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .status-card {
+            background: #FFFFFF;
+            border: 1px solid #DBDBDB;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            max-width: 400px;
+            width: 90%;
+        }
+        .status-icon {
+            font-size: 50px;
+            color: #28a745;
+            margin-bottom: 20px;
+            line-height: 1;
+        }
+        .status-title {
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #262626;
+        }
+        .status-message {
+            font-size: 16px;
+            color: #28a745;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #e6f4ea;
+            border-radius: 8px;
+        }
+        .status-time {
+            font-size: 13px;
+            color: #737373;
+            border-top: 1px solid #EFEFEF;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="status-card">
+        <div class="status-icon">✓</div>
+        <div class="status-title">Status do Sistema</div>
+        <div class="status-message">Tudo está 100% funcional!</div>
+        <div class="status-time">Data e Hora Atual: <b>{{ current_time }}</b></div>
+    </div>
+</body>
+</html>
+"""
+
 # ==========================================
 # ROTAS DO BACKEND
 # ==========================================
@@ -2907,6 +2976,11 @@ def proxy_image():
     except Exception as e:
         print(f"[PROXY IMAGE ERRO] Falha ao baixar imagem: {e}")
         return "Internal Error", 500
+
+@app.route('/status', methods=['GET'])
+def system_status():
+    current_time = datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M:%S UTC')
+    return render_template_string(STATUS_HTML_TEMPLATE, current_time=current_time)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
