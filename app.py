@@ -48,7 +48,9 @@ except Exception as e:
 # ==========================================
 CIRCUIT_BREAKER_LOCKED = False
 CIRCUIT_BREAKER_TIME = 0
-CIRCUIT_BREAKER_COOLDOWN = 2065
+# MODIFICAÇÃO CIRÚRGICA 2: Reduzido de 2065 segundos (34 min) para 45 segundos.
+# O sistema agora se autocura sem a necessidade de intervenção humana ou redeploy.
+CIRCUIT_BREAKER_COOLDOWN = 45
 
 # ==========================================
 # CACHE EM MEMÓRIA RAM
@@ -105,10 +107,20 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO CURL_CFFI E SCRAPING HTML (O NOVO MOTOR)
 # ==========================================
-PROXY_URL = "http://59022cd6d5de707a8016__cr.br:8e5efe0790f47cda@gw.dataimpulse.com:823"
+# Variáveis base para o proxy
+PROXY_BASE_USERNAME = "59022cd6d5de707a8016__cr.br"
+PROXY_PASSWORD = "8e5efe0790f47cda"
+PROXY_HOST = "gw.dataimpulse.com:823"
 
 def get_sticky_proxy():
-    return PROXY_URL
+    """
+    MODIFICAÇÃO CIRÚRGICA 1: Rotação Dinâmica de IP Absoluta.
+    Injeta uma nova sessão aleatória no proxy DataImpulse toda vez que essa função é chamada.
+    Isso força o Gateway a nos dar um IP Residencial totalmente novo a cada tentativa,
+    extirpando pela raiz o erro 429 causado por IPs "queimados".
+    """
+    random_session_id = uuid.uuid4().hex[:10]
+    return f"http://{PROXY_BASE_USERNAME}__session.{random_session_id}:{PROXY_PASSWORD}@{PROXY_HOST}"
 
 def fetch_instagram_profile(username, session_identifier):
     global CIRCUIT_BREAKER_LOCKED, CIRCUIT_BREAKER_TIME
@@ -121,7 +133,8 @@ def fetch_instagram_profile(username, session_identifier):
 
     url_profile = f"https://www.instagram.com/{username}/"
     url_base = "https://www.instagram.com/"
-    max_retries = 3
+    # MODIFICAÇÃO CIRÚRGICA 3: Aumentado para 5 retries para maximizar o uso da nova rotação de IPs limpos.
+    max_retries = 5 
     
     def parse_ig_number(val_str):
         val = val_str.upper().replace(',', '.')
@@ -2599,7 +2612,7 @@ def get_target_info():
     
     if CIRCUIT_BREAKER_LOCKED:
         if time.time() - CIRCUIT_BREAKER_TIME < CIRCUIT_BREAKER_COOLDOWN:
-            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou o acesso temporariamente. Aguarde alguns minutos."}), 429
+            return jsonify({"error": "[ALERTA DE SEGURANÇA] O Instagram identificou risco e bloqueou o acesso temporariamente. Aguarde alguns instantes."}), 429
         else:
             CIRCUIT_BREAKER_LOCKED = False
             
@@ -2677,7 +2690,7 @@ def get_target_info():
         print(f"[SCRAPER ERRO DE BUSCA] {error_msg}")
         
         if "HTTP_BLOCK" in error_msg or "CIRCUIT_BREAKER_ACTIVE" in error_msg or "REQUIRE_LOGIN_BLOCK" in error_msg:
-             return jsonify({"error": "Muitas requisições simultâneas ou bloqueio da rede. O servidor proxy está em cooldown. Tente novamente em alguns instantes."}), 429
+             return jsonify({"error": "Muitas requisições simultâneas ou bloqueio da rede. O servidor proxy está rotacionando os IP. Tente novamente em 45 segundos."}), 429
              
         if "UserNotFound" in error_msg:
              return jsonify({"error": "Usuário não encontrado. Verifique se o nome está correto e se a conta é aberta."}), 404
