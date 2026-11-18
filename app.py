@@ -335,104 +335,85 @@ def gerar_cpf_valido():
     return "".join(map(str, cpf_base))
 
 # ==========================================
-# CONFIGURAÇÃO CAKTO API (NOVO GATEWAY PRINCIPAL)
+# CONFIGURAÇÃO DISRUPTY API (NOVO GATEWAY PRINCIPAL)
 # ==========================================
-CAKTO_CLIENT_ID = "hwwyac56JDbwGVB5k1fh9DqNokJAoJHbp1oynKYf"
-CAKTO_CLIENT_SECRET = "YFXT5a1GL4A8IbUi8fWb4MbtHJclHxc1OvSa72WrDaYrxrkiXaVyVsrBMjs1OY2pRMSEAWDMkEt236PK5lSHMefqJEKbRerfSP7de67KFVFE4fc7HlmXtS1MpUYIHuXb"
-CAKTO_BASE_URL = "https://api.cakto.com.br/public_api"
+# Substitua pelas suas chaves reais da Disrupty (Painel do Seller)
+DISRUPTY_PUBLIC_KEY = "SUA_PUBLIC_KEY_AQUI"
+DISRUPTY_PRIVATE_KEY = "SUA_PRIVATE_KEY_AQUI"
+DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
 
-# INSIRA AQUI OS IDS DAS OFERTAS CADASTRADAS NO SEU PAINEL CAKTO
-CAKTO_OFFER_ID_PRO = "3fs24dr"
-CAKTO_OFFER_ID_PREMIUM = "37hq3d8"
+# INSIRA AQUI OS IDS DAS OFERTAS CADASTRADAS NO SEU PAINEL DISRUPTY (Modo Seller)
+DISRUPTY_OFFER_ID_PRO = 10001
+DISRUPTY_OFFER_ID_PREMIUM = 10002
 
-def get_cakto_access_token():
-    url = f"{CAKTO_BASE_URL}/token/"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    payload = {
-        "client_id": CAKTO_CLIENT_ID,
-        "client_secret": CAKTO_CLIENT_SECRET
-    }
-    try:
-        response = requests.post(url, headers=headers, data=payload, timeout=12)
-        response.raise_for_status()
-        return response.json().get("access_token")
-    except Exception as e:
-        print(f"[CAKTO ERRO] Falha ao obter access token: {e}")
-        return None
-
-def criar_cobranca_pix_cakto(offer_id, nome_pagador, cpf_pagador):
-    token = get_cakto_access_token()
-    if not token:
-        return None
-        
-    url = f"{CAKTO_BASE_URL}/payments/"
-    idempotency_key = str(uuid.uuid4())
-    
+def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador, cpf_pagador):
+    url = f"{DISRUPTY_BASE_URL}/api/sales"
     headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Idempotency-Key": idempotency_key
+        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
+        "x-api-private-key": DISRUPTY_PRIVATE_KEY,
+        "Content-Type": "application/json"
     }
     
     payload = {
-        "paymentMethod": "pix",
+        "amount": valor_reais, # Na Disrupty o request é em REAIS
+        "paymentMethod": "PIX",
+        "offerId": offer_id,
         "customer": {
             "name": nome_pagador,
             "email": "cliente@instpygateway.com",
-            "phone": "11999999999",
-            "docType": "cpf",
-            "docNumber": cpf_pagador,
-            "fingerprint": f"fp_{uuid.uuid4().hex[:12]}"
+            "document": cpf_pagador
         },
         "items": [
             {
-                "offerId": offer_id
+                "title": titulo_item,
+                "unitPrice": valor_reais,
+                "quantity": 1
             }
-        ],
-        "pixExpiresIn": 3600
+        ]
     }
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=12)
         response.raise_for_status()
-        transaction_data = response.json()
+        data = response.json()
+        sale = data.get("sale", {})
+        
+        qr_base64 = sale.get("payment", {}).get("pix", {}).get("qrCodeBase64")
+        pix_key = sale.get("payment", {}).get("pix", {}).get("key")
         
         return {
-            "id": str(transaction_data.get("id")),
-            "externalId": str(transaction_data.get("id")),
-            "pixCopyPaste": transaction_data.get("pix", {}).get("qrCode")
+            "id": str(sale.get("id")),
+            "externalId": str(sale.get("id")),
+            "pixCopyPaste": pix_key,
+            "qrCodeBase64": qr_base64 # Se não vier, geramos no checkout
         }
     except requests.exceptions.RequestException as e:
         resp_text = response.text if 'response' in locals() and response is not None else ''
-        print(f"[CAKTO ERRO] Falha ao criar Pix: {e} | Resposta: {resp_text}")
+        print(f"[DISRUPTY ERRO] Falha ao criar Pix: {e} | Resposta: {resp_text}")
         return None
 
-def checar_status_transacao_cakto(order_id):
-    token = get_cakto_access_token()
-    if not token:
-        return None
-        
-    url = f"{CAKTO_BASE_URL}/orders/{order_id}/"
+def checar_status_transacao_disrupty(transaction_id):
+    url = f"{DISRUPTY_BASE_URL}/api/sales/{transaction_id}"
     headers = {
-        "Authorization": f"Bearer {token}"
+        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
+        "x-api-private-key": DISRUPTY_PRIVATE_KEY
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=8)
         response.raise_for_status()
-        status_data = response.json()
+        status_data = response.json().get("data", {})
         
         current_status = status_data.get("status")
-        if current_status == "paid":
+        if current_status == "PAGO":
             return {"status": "COMPLETE"}
-        elif current_status in ["canceled", "refused", "refunded", "blocked"]:
+        elif current_status in ["RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
             return {"status": "FAILED"}
         else:
             return {"status": "PENDING"}
     except requests.exceptions.RequestException as e:
-        print(f"[CAKTO ERRO] Falha ao consultar status: {e}")
+        print(f"[DISRUPTY ERRO] Falha ao consultar status: {e}")
         return None
-
 
 # ==========================================
 # CONFIGURAÇÃO PARADISE PAGS API
@@ -514,7 +495,7 @@ def get_active_gateway():
     settings = settings_collection.find_one({"_id": "global_config"})
     if settings and "pix_gateway" in settings:
         return settings["pix_gateway"]
-    return "cakto"
+    return "disrupty"
 
 # ==========================================
 # CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
@@ -526,9 +507,9 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
-        value = 28.00
+        value = 50.00
     elif plan_requested == 'premium':
-        value = 60.00
+        value = 79.00
     else:
         value = 0.00
 
@@ -2038,7 +2019,7 @@ CONFIG_HTML_TEMPLATE = """
                     <div class="form-group">
                         <label>API de Pix Ativa (Global & Instantânea):</label>
                         <select name="pix_gateway">
-                            <option value="cakto" {% if pix_gateway == 'cakto' %}selected{% endif %}>Cakto API</option>
+                            <option value="disrupty" {% if pix_gateway == 'disrupty' %}selected{% endif %}>Disrupty API</option>
                             <option value="paradise" {% if pix_gateway == 'paradise' %}selected{% endif %}>Paradise Pags API</option>
                         </select>
                     </div>
@@ -2438,7 +2419,7 @@ def session_config():
             msg = "[SUCESSO] Configurações globais de contato atualizadas."
 
         elif action == 'update_gateway':
-            gateway_choice = request.form.get('pix_gateway', 'cakto')
+            gateway_choice = request.form.get('pix_gateway', 'disrupty')
             settings_collection.update_one(
                 {"_id": "global_config"},
                 {"$set": {"pix_gateway": gateway_choice}},
@@ -2490,7 +2471,7 @@ def session_config():
 
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
-    pix_gateway = settings.get("pix_gateway", "cakto") if settings else "cakto"
+    pix_gateway = settings.get("pix_gateway", "disrupty") if settings else "disrupty"
     
     config = config_collection.find_one({"session_id": session_id})
     current_token = config.get("custom_token", "") if config else ""
@@ -2777,16 +2758,19 @@ def checkout():
     data = request.json or {}
     plan_requested = data.get('plan')
     
-    cakto_offer_id = ""
+    disrupty_offer_id = None
+    valor_reais = 0.00
     valor_centavos = 0
     desc = ""
     
     if plan_requested == 'pro':
-        cakto_offer_id = CAKTO_OFFER_ID_PRO
+        disrupty_offer_id = DISRUPTY_OFFER_ID_PRO
+        valor_reais = 50.00
         valor_centavos = 5000
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        cakto_offer_id = CAKTO_OFFER_ID_PREMIUM
+        disrupty_offer_id = DISRUPTY_OFFER_ID_PREMIUM
+        valor_reais = 79.00
         valor_centavos = 7900
         desc = "Plano Premium - 1 Mes"
     else:
@@ -2820,25 +2804,31 @@ def checkout():
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
     else:
-        pix_data = criar_cobranca_pix_cakto(
-            cakto_offer_id, 
+        # Usa Disrupty API
+        pix_data = criar_cobranca_pix_disrupty(
+            disrupty_offer_id, 
+            valor_reais,
+            desc,
             payer_name, 
             payer_cpf
         )
         if not pix_data:
-            return jsonify({"error": "Falha na comunicação com provedor Cakto API."}), 500
+            return jsonify({"error": "Falha na comunicação com provedor Disrupty API."}), 500
         
     transaction_id = pix_data['id']
     copia_e_cola = pix_data['pixCopyPaste']
+    qr_b64 = pix_data.get('qrCodeBase64')
     
-    qr = qrcode.QRCode(box_size=10, border=2)
-    qr.add_data(copia_e_cola)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    # Caso a API da Disrupty não devolva a imagem (ocorre dependendo da adquirente), geramos localmente
+    if not qr_b64:
+        qr = qrcode.QRCode(box_size=10, border=2)
+        qr.add_data(copia_e_cola)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     
     payments_collection.insert_one({
         "transaction_id": transaction_id,
@@ -2862,10 +2852,10 @@ def checkout():
     })
 
 # ==========================================
-# ENDPOINT DE WEBHOOK EM TEMPO REAL (CAKTO & PARADISE)
+# ENDPOINT DE WEBHOOK EM TEMPO REAL (DISRUPTY & PARADISE)
 # ==========================================
 @app.route('/api/webhook/pix', methods=['POST'])
-@app.route('/api/webhook/cakto', methods=['POST'])
+@app.route('/api/webhook/disrupty', methods=['POST'])
 def webhook_pix_handler():
     try:
         data = request.get_json(force=True, silent=True)
@@ -2874,6 +2864,7 @@ def webhook_pix_handler():
 
         print(f"[WEBHOOK RECEBIDO] Dados: {data}")
         
+        # transactionId e status são os campos padrão da Disrupty e de outros gateways
         transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("order_id") or data.get("id") or "")
         external_id = str(data.get("externalId") or data.get("external_id") or "")
         status = data.get("status")
@@ -2892,9 +2883,10 @@ def webhook_pix_handler():
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
-            if status in ["COMPLETE", "approved", "PAID", "COMPLETED", "paid"]:
+            # PAGO é o status da Disrupty para pago com sucesso
+            if status in ["COMPLETE", "approved", "PAID", "COMPLETED", "paid", "PAGO"]:
                 internal_status = "COMPLETE"
-            elif status in ["failed", "refunded", "chargeback", "CANCELED", "canceled", "refused", "blocked"]:
+            elif status in ["failed", "refunded", "chargeback", "CANCELED", "canceled", "refused", "blocked", "RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
                 internal_status = "FAILED"
             else:
                 internal_status = status
@@ -2934,15 +2926,15 @@ def webhook_pix_handler():
 def check_payment(transaction_id):
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
     
-    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID"]:
+    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID", "PAGO"]:
         return jsonify({"status": "COMPLETE"})
         
-    gateway_used = payment_record.get('gateway', 'cakto') if payment_record else 'cakto'
+    gateway_used = payment_record.get('gateway', 'disrupty') if payment_record else 'disrupty'
     
     if gateway_used == 'paradise':
         tx_info = checar_status_transacao_paradise(transaction_id)
     else:
-        tx_info = checar_status_transacao_cakto(transaction_id)
+        tx_info = checar_status_transacao_disrupty(transaction_id)
         
     if not tx_info:
         if payment_record:
