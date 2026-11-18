@@ -335,16 +335,97 @@ def gerar_cpf_valido():
     return "".join(map(str, cpf_base))
 
 # ==========================================
-# CONFIGURAÇÃO DISRUPTY API (NOVO GATEWAY PRINCIPAL)
+# CONFIGURAÇÃO URUSPAY API (NOVO GATEWAY)
 # ==========================================
-# Chaves Privadas e Públicas da Disrupty
+URUSPAY_API_KEY = "urus_live_07a35e2f1d5f6e23d925513cd07f7676"
+URUSPAY_BASE_URL = "https://uruspaypagamentos.com/api/v1"
+
+def criar_cobranca_pix_uruspay(valor_reais, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
+    url = f"{URUSPAY_BASE_URL}/charge"
+    headers = {
+        "Authorization": f"Bearer {URUSPAY_API_KEY}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": f"order-{uuid.uuid4().hex}"
+    }
+    
+    payload = {
+        "valor": valor_reais,
+        "nome": nome_pagador,
+        "email": "cliente@instpygateway.com",
+        "cpf": cpf_pagador,
+        "descricao": descricao
+    }
+    
+    if webhook_url:
+        payload["webhook_url"] = webhook_url
+        
+    if tracking:
+        if tracking.get("client_ip"):
+            payload["ip"] = tracking["client_ip"]
+        if tracking.get("client_user_agent"):
+            payload["user_agent"] = tracking["client_user_agent"]
+        if tracking.get("fbp"):
+            payload["fbp"] = tracking["fbp"]
+        if tracking.get("fbc"):
+            payload["fbc"] = tracking["fbc"]
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=12)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("ok"):
+            qr_url = data.get("qr_code_url", "")
+            # Remove o prefixo data URI gerado pela API caso exista para renderizar corretamente no front
+            if qr_url.startswith("data:image/png;base64,"):
+                qr_url = qr_url.replace("data:image/png;base64,", "")
+            
+            return {
+                "id": str(data.get("venda_id")),
+                "externalId": str(data.get("venda_id")),
+                "pixCopyPaste": data.get("pix_code"),
+                "qrCodeBase64": qr_url
+            }
+        else:
+            print(f"[URUSPAY ERRO] Falha ao criar Pix. Resposta: {data}")
+            return None
+    except requests.exceptions.RequestException as e:
+        resp_text = response.text if 'response' in locals() and response is not None else ''
+        print(f"[URUSPAY EXCEPTION] Erro de rede/API: {e} | Detalhes: {resp_text}")
+        return None
+
+def checar_status_transacao_uruspay(transaction_id):
+    url = f"{URUSPAY_BASE_URL}/status/{transaction_id}"
+    headers = {
+        "Authorization": f"Bearer {URUSPAY_API_KEY}"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=8)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("ok"):
+            status = data.get("status")
+            if status == "paid":
+                return {"status": "COMPLETE"}
+            elif status in ["cancelled", "refunded"]:
+                return {"status": "FAILED"}
+            else:
+                return {"status": "PENDING"}
+        else:
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"[URUSPAY ERRO] Falha ao consultar status: {e}")
+        return None
+
+# ==========================================
+# CONFIGURAÇÃO DISRUPTY API
+# ==========================================
 DISRUPTY_PUBLIC_KEY = "dsrp_6baa9947f6bef6ec0e3cccaf0da6157d"
 DISRUPTY_PRIVATE_KEY = "dsrp_1b3680c1a45c4ea01122e2349060fb2f9c818e397af42f1ae58a5e07f1e15785"
 DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
 
-# Como a oferta 8354 pertence a outro tenant (daí o erro 403 CROSS_TENANT_BLOCKED),
-# nós não enviaremos o offerId no payload de requisição.
-# A ausência do offerId FORÇA a Disrupty a criar a venda com 100% de sucesso sem verificação de posse.
 DISRUPTY_OFFER_ID_PRO = None
 DISRUPTY_OFFER_ID_PREMIUM = None
 
@@ -356,10 +437,8 @@ def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador
         "Content-Type": "application/json"
     }
     
-    # O payload está intencionalmente sem o campo "offerId".
-    # Isso resolve de forma absoluta o erro 403 CROSS_TENANT_BLOCKED.
     payload = {
-        "amount": valor_reais, # Na Disrupty o request é em REAIS
+        "amount": valor_reais, 
         "paymentMethod": "PIX",
         "customer": {
             "name": nome_pagador,
@@ -388,7 +467,7 @@ def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador
             "id": str(sale.get("id")),
             "externalId": str(sale.get("id")),
             "pixCopyPaste": pix_key,
-            "qrCodeBase64": qr_base64 # Se não vier, geramos no checkout
+            "qrCodeBase64": qr_base64 
         }
     except requests.exceptions.RequestException as e:
         resp_text = response.text if 'response' in locals() and response is not None else ''
@@ -498,7 +577,7 @@ def get_active_gateway():
     settings = settings_collection.find_one({"_id": "global_config"})
     if settings and "pix_gateway" in settings:
         return settings["pix_gateway"]
-    return "disrupty"
+    return "uruspay"
 
 # ==========================================
 # CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
@@ -2022,6 +2101,7 @@ CONFIG_HTML_TEMPLATE = """
                     <div class="form-group">
                         <label>API de Pix Ativa (Global & Instantânea):</label>
                         <select name="pix_gateway">
+                            <option value="uruspay" {% if pix_gateway == 'uruspay' %}selected{% endif %}>UrusPay API</option>
                             <option value="disrupty" {% if pix_gateway == 'disrupty' %}selected{% endif %}>Disrupty API</option>
                             <option value="paradise" {% if pix_gateway == 'paradise' %}selected{% endif %}>Paradise Pags API</option>
                         </select>
@@ -2422,7 +2502,7 @@ def session_config():
             msg = "[SUCESSO] Configurações globais de contato atualizadas."
 
         elif action == 'update_gateway':
-            gateway_choice = request.form.get('pix_gateway', 'disrupty')
+            gateway_choice = request.form.get('pix_gateway', 'uruspay')
             settings_collection.update_one(
                 {"_id": "global_config"},
                 {"$set": {"pix_gateway": gateway_choice}},
@@ -2474,7 +2554,7 @@ def session_config():
 
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
-    pix_gateway = settings.get("pix_gateway", "disrupty") if settings else "disrupty"
+    pix_gateway = settings.get("pix_gateway", "uruspay") if settings else "uruspay"
     
     config = config_collection.find_one({"session_id": session_id})
     current_token = config.get("custom_token", "") if config else ""
@@ -2806,6 +2886,22 @@ def checkout():
         )
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
+            
+    elif gateway == "uruspay":
+        tracking_uruspay = {
+            "client_ip": client_ip,
+            "client_user_agent": user_agent,
+            "fbp": fbp,
+            "fbc": fbc
+        }
+        pix_data = criar_cobranca_pix_uruspay(
+            valor_reais, desc, payer_name, payer_cpf,
+            webhook_url=webhook_url,
+            tracking=tracking_uruspay
+        )
+        if not pix_data:
+            return jsonify({"error": "Falha na comunicação com provedor UrusPay API."}), 500
+            
     else:
         # Usa Disrupty API (sem offerId para contornar CROSS_TENANT_BLOCKED)
         pix_data = criar_cobranca_pix_disrupty(
@@ -2822,7 +2918,7 @@ def checkout():
     copia_e_cola = pix_data['pixCopyPaste']
     qr_b64 = pix_data.get('qrCodeBase64')
     
-    # Caso a API da Disrupty não devolva a imagem (ocorre dependendo da adquirente), geramos localmente
+    # Caso a API da Disrupty ou Paradise não devolva a imagem (ocorre dependendo da adquirente), geramos localmente
     if not qr_b64:
         qr = qrcode.QRCode(box_size=10, border=2)
         qr.add_data(copia_e_cola)
@@ -2855,7 +2951,7 @@ def checkout():
     })
 
 # ==========================================
-# ENDPOINT DE WEBHOOK EM TEMPO REAL (DISRUPTY & PARADISE)
+# ENDPOINT DE WEBHOOK EM TEMPO REAL (DISRUPTY, PARADISE & URUSPAY)
 # ==========================================
 @app.route('/api/webhook/pix', methods=['POST'])
 @app.route('/api/webhook/disrupty', methods=['POST'])
@@ -2867,10 +2963,11 @@ def webhook_pix_handler():
 
         print(f"[WEBHOOK RECEBIDO] Dados: {data}")
         
-        # transactionId e status são os campos padrão da Disrupty e de outros gateways
-        transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("order_id") or data.get("id") or "")
+        # transactionId e status são os campos padrão da Disrupty, UrusPay e de outros gateways
+        transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("order_id") or data.get("id") or data.get("venda_id") or "")
         external_id = str(data.get("externalId") or data.get("external_id") or "")
         status = data.get("status")
+        uruspay_event = request.headers.get("X-UrusPay-Event")
 
         if not transaction_id and not external_id:
             return jsonify({"status": "ignored", "error": "ID ausente no Payload"}), 400
@@ -2886,13 +2983,13 @@ def webhook_pix_handler():
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
-            # PAGO é o status da Disrupty para pago com sucesso
-            if status in ["COMPLETE", "approved", "PAID", "COMPLETED", "paid", "PAGO"]:
+            # Integração robusta validando o status ou os headers da UrusPay
+            if uruspay_event == "venda_concluida" or status in ["COMPLETE", "approved", "PAID", "COMPLETED", "paid", "PAGO"]:
                 internal_status = "COMPLETE"
-            elif status in ["failed", "refunded", "chargeback", "CANCELED", "canceled", "refused", "blocked", "RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
+            elif uruspay_event in ["venda_cancelada", "venda_reembolsada"] or status in ["failed", "refunded", "chargeback", "CANCELED", "canceled", "refused", "blocked", "RECUSADO", "CANCELADO", "ESTORNADO", "FALHA", "cancelled"]:
                 internal_status = "FAILED"
             else:
-                internal_status = status
+                internal_status = status or "PENDING"
 
             payments_collection.update_one(
                 {"_id": payment_record["_id"]},
@@ -2929,13 +3026,15 @@ def webhook_pix_handler():
 def check_payment(transaction_id):
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
     
-    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID", "PAGO"]:
+    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID", "PAGO", "paid"]:
         return jsonify({"status": "COMPLETE"})
         
-    gateway_used = payment_record.get('gateway', 'disrupty') if payment_record else 'disrupty'
+    gateway_used = payment_record.get('gateway', 'uruspay') if payment_record else 'uruspay'
     
     if gateway_used == 'paradise':
         tx_info = checar_status_transacao_paradise(transaction_id)
+    elif gateway_used == 'uruspay':
+        tx_info = checar_status_transacao_uruspay(transaction_id)
     else:
         tx_info = checar_status_transacao_disrupty(transaction_id)
         
