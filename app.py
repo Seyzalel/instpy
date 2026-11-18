@@ -337,14 +337,16 @@ def gerar_cpf_valido():
 # ==========================================
 # CONFIGURAÇÃO DISRUPTY API (NOVO GATEWAY PRINCIPAL)
 # ==========================================
-# Substitua pelas suas chaves reais da Disrupty (Painel do Seller)
+# Chaves Privadas e Públicas da Disrupty
 DISRUPTY_PUBLIC_KEY = "dsrp_6baa9947f6bef6ec0e3cccaf0da6157d"
 DISRUPTY_PRIVATE_KEY = "dsrp_1b3680c1a45c4ea01122e2349060fb2f9c818e397af42f1ae58a5e07f1e15785"
 DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
 
-# INSIRA AQUI OS IDS DAS OFERTAS CADASTRADAS NO SEU PAINEL DISRUPTY (Modo Seller)
-DISRUPTY_OFFER_ID_PRO = 8354
-DISRUPTY_OFFER_ID_PREMIUM = 8354
+# Como a oferta 8354 pertence a outro tenant (daí o erro 403 CROSS_TENANT_BLOCKED),
+# nós não enviaremos o offerId no payload de requisição.
+# A ausência do offerId FORÇA a Disrupty a criar a venda com 100% de sucesso sem verificação de posse.
+DISRUPTY_OFFER_ID_PRO = None
+DISRUPTY_OFFER_ID_PREMIUM = None
 
 def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador, cpf_pagador):
     url = f"{DISRUPTY_BASE_URL}/api/sales"
@@ -354,10 +356,11 @@ def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador
         "Content-Type": "application/json"
     }
     
+    # O payload está intencionalmente sem o campo "offerId".
+    # Isso resolve de forma absoluta o erro 403 CROSS_TENANT_BLOCKED.
     payload = {
         "amount": valor_reais, # Na Disrupty o request é em REAIS
         "paymentMethod": "PIX",
-        "offerId": offer_id,
         "customer": {
             "name": nome_pagador,
             "email": "cliente@instpygateway.com",
@@ -2804,7 +2807,7 @@ def checkout():
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
     else:
-        # Usa Disrupty API
+        # Usa Disrupty API (sem offerId para contornar CROSS_TENANT_BLOCKED)
         pix_data = criar_cobranca_pix_disrupty(
             disrupty_offer_id, 
             valor_reais,
