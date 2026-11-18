@@ -338,13 +338,13 @@ def gerar_cpf_valido():
 # CONFIGURAÇÃO DISRUPTY API (NOVO GATEWAY PRINCIPAL)
 # ==========================================
 # Substitua pelas suas chaves reais da Disrupty (Painel do Seller)
-DISRUPTY_PUBLIC_KEY = "SUA_PUBLIC_KEY_AQUI"
-DISRUPTY_PRIVATE_KEY = "SUA_PRIVATE_KEY_AQUI"
+DISRUPTY_PUBLIC_KEY = "dsrp_6baa9947f6bef6ec0e3cccaf0da6157d"
+DISRUPTY_PRIVATE_KEY = "dsrp_1b3680c1a45c4ea01122e2349060fb2f9c818e397af42f1ae58a5e07f1e15785"
 DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
 
 # INSIRA AQUI OS IDS DAS OFERTAS CADASTRADAS NO SEU PAINEL DISRUPTY (Modo Seller)
-DISRUPTY_OFFER_ID_PRO = 10001
-DISRUPTY_OFFER_ID_PREMIUM = 10002
+DISRUPTY_OFFER_ID_PRO = 8354
+DISRUPTY_OFFER_ID_PREMIUM = 8354
 
 def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador, cpf_pagador):
     url = f"{DISRUPTY_BASE_URL}/api/sales"
