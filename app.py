@@ -48,6 +48,8 @@ except Exception as e:
 # ==========================================
 CIRCUIT_BREAKER_LOCKED = False
 CIRCUIT_BREAKER_TIME = 0
+# MODIFICAÇÃO CIRÚRGICA 2: Reduzido de 2065 segundos (34 min) para 45 segundos.
+# O sistema agora se autocura sem a necessidade de intervenção humana ou redeploy.
 CIRCUIT_BREAKER_COOLDOWN = 45
 
 # ==========================================
@@ -105,11 +107,18 @@ def bot_firewall():
 # ==========================================
 # CONFIGURAÇÃO CURL_CFFI E SCRAPING HTML (O NOVO MOTOR)
 # ==========================================
+# Variáveis base para o proxy
 PROXY_BASE_USERNAME = "59022cd6d5de707a8016__cr.br"
 PROXY_PASSWORD = "8e5efe0790f47cda"
 PROXY_HOST = "gw.dataimpulse.com:823"
 
 def get_sticky_proxy():
+    """
+    MODIFICAÇÃO CIRÚRGICA 1: Rotação Dinâmica de IP Absoluta.
+    Injeta uma nova sessão aleatória no proxy DataImpulse toda vez que essa função é chamada.
+    Isso força o Gateway a nos dar um IP Residencial totalmente novo a cada tentativa,
+    extirpando pela raiz o erro 429 causado por IPs "queimados".
+    """
     random_session_id = uuid.uuid4().hex[:10]
     return f"http://{PROXY_BASE_USERNAME}__session.{random_session_id}:{PROXY_PASSWORD}@{PROXY_HOST}"
 
@@ -124,6 +133,7 @@ def fetch_instagram_profile(username, session_identifier):
 
     url_profile = f"https://www.instagram.com/{username}/"
     url_base = "https://www.instagram.com/"
+    # MODIFICAÇÃO CIRÚRGICA 3: Aumentado para 5 retries para maximizar o uso da nova rotação de IPs limpos.
     max_retries = 5 
     
     def parse_ig_number(val_str):
@@ -141,6 +151,7 @@ def fetch_instagram_profile(username, session_identifier):
             return val_str
 
     def clean_text(text):
+        """Esteriliza o texto decodificando emojis escapados e removendo surrogates isolados que cracham o DB"""
         if not text: return ""
         text = text.replace('\\/', '/')
         try:
@@ -209,6 +220,9 @@ def fetch_instagram_profile(username, session_identifier):
                 is_verified = False
                 success_json = False
                 
+                # =========================================
+                # CAMADA A: EXTRATOR REGEX CIRÚRGICO DE JSON
+                # =========================================
                 pic_match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
                 if not pic_match:
                     pic_match = re.search(r'"profile_pic_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
@@ -241,6 +255,9 @@ def fetch_instagram_profile(username, session_identifier):
                     if verif_match and verif_match.group(1) == 'true':
                         is_verified = True
                 
+                # =========================================
+                # CAMADA B: FAILSAFE (META TAGS OPENGRAPH)
+                # =========================================
                 if not success_json:
                     print(f"[CURL_CFFI] Bloqueio JSON detectado. Acionando Failsafe Camada B (OpenGraph Meta Tags)...")
                     
@@ -335,166 +352,47 @@ def gerar_cpf_valido():
     return "".join(map(str, cpf_base))
 
 # ==========================================
-# CONFIGURAÇÃO URUSPAY API (NOVO GATEWAY)
+# CONFIGURAÇÃO GGPIXAPI
 # ==========================================
-URUSPAY_API_KEY = "urus_live_07a35e2f1d5f6e23d925513cd07f7676"
-URUSPAY_BASE_URL = "https://uruspaypagamentos.com/api/v1"
+GGPIX_API_KEY = "gk_64425202f1286434cc2c5f2cab27b6952edc30caa87e3a77"
+GGPIX_BASE_URL = "https://ggpixapi.com/api/v1"
+GGPIX_HEADERS = {
+    "Content-Type": "application/json",
+    "X-API-Key": GGPIX_API_KEY
+}
 
-def criar_cobranca_pix_uruspay(valor_reais, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
-    url = f"{URUSPAY_BASE_URL}/charge"
-    headers = {
-        "Authorization": f"Bearer {URUSPAY_API_KEY}",
-        "Content-Type": "application/json",
-        "Idempotency-Key": f"order-{uuid.uuid4().hex}"
-    }
-    
+def criar_cobranca_pix_ggpix(valor_centavos, descricao, nome_pagador, cpf_pagador, webhook_url=None, tracking=None):
+    url = f"{GGPIX_BASE_URL}/pix/in"
+    external_id = f"DMReporting-{uuid.uuid4().hex[:8]}"
     payload = {
-        "valor": valor_reais,
-        "nome": nome_pagador,
-        "email": "cliente@instpygateway.com",
-        "cpf": cpf_pagador,
-        "descricao": descricao
+        "amountCents": valor_centavos,
+        "description": descricao,
+        "payerName": nome_pagador,
+        "payerDocument": cpf_pagador,
+        "externalId": external_id
     }
-    
     if webhook_url:
-        payload["webhook_url"] = webhook_url
-        
+        payload["webhookUrl"] = webhook_url
     if tracking:
-        if tracking.get("client_ip"):
-            payload["ip"] = tracking["client_ip"]
-        if tracking.get("client_user_agent"):
-            payload["user_agent"] = tracking["client_user_agent"]
-        if tracking.get("fbp"):
-            payload["fbp"] = tracking["fbp"]
-        if tracking.get("fbc"):
-            payload["fbc"] = tracking["fbc"]
+        payload["tracking"] = tracking
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=12)
+        response = requests.post(url, headers=GGPIX_HEADERS, json=payload, timeout=12)
         response.raise_for_status()
-        data = response.json()
-        
-        if data.get("ok"):
-            qr_url = data.get("qr_code_url", "")
-            # Remove o prefixo data URI gerado pela API caso exista para renderizar corretamente no front
-            if qr_url.startswith("data:image/png;base64,"):
-                qr_url = qr_url.replace("data:image/png;base64,", "")
-            
-            return {
-                "id": str(data.get("venda_id")),
-                "externalId": str(data.get("venda_id")),
-                "pixCopyPaste": data.get("pix_code"),
-                "qrCodeBase64": qr_url
-            }
-        else:
-            print(f"[URUSPAY ERRO] Falha ao criar Pix. Resposta: {data}")
-            return None
-    except requests.exceptions.RequestException as e:
+        return response.json()
+    except requests.exceptions.RequestException as err:
         resp_text = response.text if 'response' in locals() and response is not None else ''
-        print(f"[URUSPAY EXCEPTION] Erro de rede/API: {e} | Detalhes: {resp_text}")
+        print(f"Erro ao gerar PIX (GGPIX): {err} - Response: {resp_text}")
         return None
 
-def checar_status_transacao_uruspay(transaction_id):
-    url = f"{URUSPAY_BASE_URL}/status/{transaction_id}"
-    headers = {
-        "Authorization": f"Bearer {URUSPAY_API_KEY}"
-    }
-    
+def checar_status_transacao_ggpix(transaction_id):
+    url = f"{GGPIX_BASE_URL}/transactions/{transaction_id}"
     try:
-        response = requests.get(url, headers=headers, timeout=8)
+        response = requests.get(url, headers=GGPIX_HEADERS, timeout=8)
         response.raise_for_status()
-        data = response.json()
-        
-        if data.get("ok"):
-            status = data.get("status")
-            if status == "paid":
-                return {"status": "COMPLETE"}
-            elif status in ["cancelled", "refunded"]:
-                return {"status": "FAILED"}
-            else:
-                return {"status": "PENDING"}
-        else:
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"[URUSPAY ERRO] Falha ao consultar status: {e}")
-        return None
-
-# ==========================================
-# CONFIGURAÇÃO DISRUPTY API
-# ==========================================
-DISRUPTY_PUBLIC_KEY = "dsrp_6baa9947f6bef6ec0e3cccaf0da6157d"
-DISRUPTY_PRIVATE_KEY = "dsrp_1b3680c1a45c4ea01122e2349060fb2f9c818e397af42f1ae58a5e07f1e15785"
-DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
-
-DISRUPTY_OFFER_ID_PRO = None
-DISRUPTY_OFFER_ID_PREMIUM = None
-
-def criar_cobranca_pix_disrupty(offer_id, valor_reais, titulo_item, nome_pagador, cpf_pagador):
-    url = f"{DISRUPTY_BASE_URL}/api/sales"
-    headers = {
-        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
-        "x-api-private-key": DISRUPTY_PRIVATE_KEY,
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "amount": valor_reais, 
-        "paymentMethod": "PIX",
-        "customer": {
-            "name": nome_pagador,
-            "email": "cliente@instpygateway.com",
-            "document": cpf_pagador
-        },
-        "items": [
-            {
-                "title": titulo_item,
-                "unitPrice": valor_reais,
-                "quantity": 1
-            }
-        ]
-    }
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=12)
-        response.raise_for_status()
-        data = response.json()
-        sale = data.get("sale", {})
-        
-        qr_base64 = sale.get("payment", {}).get("pix", {}).get("qrCodeBase64")
-        pix_key = sale.get("payment", {}).get("pix", {}).get("key")
-        
-        return {
-            "id": str(sale.get("id")),
-            "externalId": str(sale.get("id")),
-            "pixCopyPaste": pix_key,
-            "qrCodeBase64": qr_base64 
-        }
-    except requests.exceptions.RequestException as e:
-        resp_text = response.text if 'response' in locals() and response is not None else ''
-        print(f"[DISRUPTY ERRO] Falha ao criar Pix: {e} | Resposta: {resp_text}")
-        return None
-
-def checar_status_transacao_disrupty(transaction_id):
-    url = f"{DISRUPTY_BASE_URL}/api/sales/{transaction_id}"
-    headers = {
-        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
-        "x-api-private-key": DISRUPTY_PRIVATE_KEY
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=8)
-        response.raise_for_status()
-        status_data = response.json().get("data", {})
-        
-        current_status = status_data.get("status")
-        if current_status == "PAGO":
-            return {"status": "COMPLETE"}
-        elif current_status in ["RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
-            return {"status": "FAILED"}
-        else:
-            return {"status": "PENDING"}
-    except requests.exceptions.RequestException as e:
-        print(f"[DISRUPTY ERRO] Falha ao consultar status: {e}")
+        return response.json()
+    except requests.exceptions.RequestException as err:
+        print(f"Erro ao checar status PIX (GGPIX): {err}")
         return None
 
 # ==========================================
@@ -569,7 +467,6 @@ def checar_status_transacao_paradise(transaction_id):
         print(f"Erro na conexao de consulta (Paradise): {e}")
         return None
 
-
 # ==========================================
 # GET GATEWAY ATUAL GLOBAL
 # ==========================================
@@ -577,7 +474,7 @@ def get_active_gateway():
     settings = settings_collection.find_one({"_id": "global_config"})
     if settings and "pix_gateway" in settings:
         return settings["pix_gateway"]
-    return "uruspay"
+    return "ggpix"
 
 # ==========================================
 # CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
@@ -589,9 +486,9 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     url = f"https://graph.facebook.com/v20.0/{META_PIXEL_ID}/events?access_token={META_ACCESS_TOKEN}"
     
     if plan_requested == 'pro':
-        value = 50.00
+        value = 28.00
     elif plan_requested == 'premium':
-        value = 79.00
+        value = 60.00
     else:
         value = 0.00
 
@@ -775,7 +672,7 @@ NOTIFICATION_COMPONENT_HTML = r"""
 """
 
 # ==========================================
-# TEMPLATES HTML 
+# TEMPLATES HTML (MANTIDOS 100% INTACTOS COM A MODIFICAÇÃO DO MODAL DE CHECKOUT)
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -1681,6 +1578,7 @@ HTML_TEMPLATE = """
                 const data = await response.json();
 
                 if (response.ok) {
+                    // MUDANÇA DA PROXY IMPLEMENTADA AQUI
                     document.getElementById('m-pic').src = '/api/proxy_image?url=' + encodeURIComponent(data.profile_pic);
                     document.getElementById('m-name').innerText = data.full_name + (data.is_verified ? " [Verificado]" : "");
                     document.getElementById('m-username').innerText = data.username;
@@ -2101,8 +1999,7 @@ CONFIG_HTML_TEMPLATE = """
                     <div class="form-group">
                         <label>API de Pix Ativa (Global & Instantânea):</label>
                         <select name="pix_gateway">
-                            <option value="uruspay" {% if pix_gateway == 'uruspay' %}selected{% endif %}>UrusPay API</option>
-                            <option value="disrupty" {% if pix_gateway == 'disrupty' %}selected{% endif %}>Disrupty API</option>
+                            <option value="ggpix" {% if pix_gateway == 'ggpix' %}selected{% endif %}>GGPIX API</option>
                             <option value="paradise" {% if pix_gateway == 'paradise' %}selected{% endif %}>Paradise Pags API</option>
                         </select>
                     </div>
@@ -2502,7 +2399,7 @@ def session_config():
             msg = "[SUCESSO] Configurações globais de contato atualizadas."
 
         elif action == 'update_gateway':
-            gateway_choice = request.form.get('pix_gateway', 'uruspay')
+            gateway_choice = request.form.get('pix_gateway', 'ggpix')
             settings_collection.update_one(
                 {"_id": "global_config"},
                 {"$set": {"pix_gateway": gateway_choice}},
@@ -2554,7 +2451,7 @@ def session_config():
 
     settings = settings_collection.find_one({"_id": "global_config"})
     whatsapp_number = settings.get("whatsapp_number", "") if settings else ""
-    pix_gateway = settings.get("pix_gateway", "uruspay") if settings else "uruspay"
+    pix_gateway = settings.get("pix_gateway", "ggpix") if settings else "ggpix"
     
     config = config_collection.find_one({"session_id": session_id})
     current_token = config.get("custom_token", "") if config else ""
@@ -2841,25 +2738,19 @@ def checkout():
     data = request.json or {}
     plan_requested = data.get('plan')
     
-    disrupty_offer_id = None
-    valor_reais = 0.00
-    valor_centavos = 0
-    desc = ""
-    
     if plan_requested == 'pro':
-        disrupty_offer_id = DISRUPTY_OFFER_ID_PRO
-        valor_reais = 50.00
         valor_centavos = 5000
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        disrupty_offer_id = DISRUPTY_OFFER_ID_PREMIUM
-        valor_reais = 79.00
         valor_centavos = 7900
         desc = "Plano Premium - 1 Mes"
     else:
         return jsonify({"error": "Plano invalido."}), 400
         
+    # Obtém um CPF matematicamente válido gerado localmente pelo backend
+    # evitando pedir qualquer dado sensível ao usuário.
     user_cpf = gerar_cpf_valido()
+    
     gateway = get_active_gateway()
     payer_name = f"Cliente {uuid.uuid4().hex[:6]}" 
     payer_cpf = user_cpf
@@ -2886,48 +2777,29 @@ def checkout():
         )
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
-            
-    elif gateway == "uruspay":
-        tracking_uruspay = {
-            "client_ip": client_ip,
-            "client_user_agent": user_agent,
-            "fbp": fbp,
-            "fbc": fbc
-        }
-        pix_data = criar_cobranca_pix_uruspay(
-            valor_reais, desc, payer_name, payer_cpf,
-            webhook_url=webhook_url,
-            tracking=tracking_uruspay
-        )
-        if not pix_data:
-            return jsonify({"error": "Falha na comunicação com provedor UrusPay API."}), 500
-            
     else:
-        # Usa Disrupty API (sem offerId para contornar CROSS_TENANT_BLOCKED)
-        pix_data = criar_cobranca_pix_disrupty(
-            disrupty_offer_id, 
-            valor_reais,
-            desc,
+        pix_data = criar_cobranca_pix_ggpix(
+            valor_centavos, 
+            desc, 
             payer_name, 
-            payer_cpf
+            payer_cpf, 
+            webhook_url=webhook_url, 
+            tracking=tracking_payload
         )
         if not pix_data:
-            return jsonify({"error": "Falha na comunicação com provedor Disrupty API."}), 500
+            return jsonify({"error": "Falha na comunicação com provedor GGPIX."}), 500
         
     transaction_id = pix_data['id']
     copia_e_cola = pix_data['pixCopyPaste']
-    qr_b64 = pix_data.get('qrCodeBase64')
     
-    # Caso a API da Disrupty ou Paradise não devolva a imagem (ocorre dependendo da adquirente), geramos localmente
-    if not qr_b64:
-        qr = qrcode.QRCode(box_size=10, border=2)
-        qr.add_data(copia_e_cola)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(copia_e_cola)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     
     payments_collection.insert_one({
         "transaction_id": transaction_id,
@@ -2951,10 +2823,10 @@ def checkout():
     })
 
 # ==========================================
-# ENDPOINT DE WEBHOOK EM TEMPO REAL (DISRUPTY, PARADISE & URUSPAY)
+# ENDPOINT DE WEBHOOK EM TEMPO REAL (GGPIX & PARADISE)
 # ==========================================
 @app.route('/api/webhook/pix', methods=['POST'])
-@app.route('/api/webhook/disrupty', methods=['POST'])
+@app.route('/api/webhook/ggpix', methods=['POST'])
 def webhook_pix_handler():
     try:
         data = request.get_json(force=True, silent=True)
@@ -2963,11 +2835,9 @@ def webhook_pix_handler():
 
         print(f"[WEBHOOK RECEBIDO] Dados: {data}")
         
-        # transactionId e status são os campos padrão da Disrupty, UrusPay e de outros gateways
-        transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("order_id") or data.get("id") or data.get("venda_id") or "")
+        transaction_id = str(data.get("transactionId") or data.get("transaction_id") or data.get("id") or "")
         external_id = str(data.get("externalId") or data.get("external_id") or "")
         status = data.get("status")
-        uruspay_event = request.headers.get("X-UrusPay-Event")
 
         if not transaction_id and not external_id:
             return jsonify({"status": "ignored", "error": "ID ausente no Payload"}), 400
@@ -2983,13 +2853,12 @@ def webhook_pix_handler():
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
-            # Integração robusta validando o status ou os headers da UrusPay
-            if uruspay_event == "venda_concluida" or status in ["COMPLETE", "approved", "PAID", "COMPLETED", "paid", "PAGO"]:
+            if status in ["COMPLETE", "approved", "PAID", "COMPLETED"]:
                 internal_status = "COMPLETE"
-            elif uruspay_event in ["venda_cancelada", "venda_reembolsada"] or status in ["failed", "refunded", "chargeback", "CANCELED", "canceled", "refused", "blocked", "RECUSADO", "CANCELADO", "ESTORNADO", "FALHA", "cancelled"]:
+            elif status in ["failed", "refunded", "chargeback", "CANCELED"]:
                 internal_status = "FAILED"
             else:
-                internal_status = status or "PENDING"
+                internal_status = status
 
             payments_collection.update_one(
                 {"_id": payment_record["_id"]},
@@ -3026,17 +2895,15 @@ def webhook_pix_handler():
 def check_payment(transaction_id):
     payment_record = payments_collection.find_one({"transaction_id": transaction_id})
     
-    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID", "PAGO", "paid"]:
+    if payment_record and payment_record.get("status") in ["COMPLETE", "approved", "PAID"]:
         return jsonify({"status": "COMPLETE"})
         
-    gateway_used = payment_record.get('gateway', 'uruspay') if payment_record else 'uruspay'
+    gateway_used = payment_record.get('gateway', 'ggpix') if payment_record else 'ggpix'
     
     if gateway_used == 'paradise':
         tx_info = checar_status_transacao_paradise(transaction_id)
-    elif gateway_used == 'uruspay':
-        tx_info = checar_status_transacao_uruspay(transaction_id)
     else:
-        tx_info = checar_status_transacao_disrupty(transaction_id)
+        tx_info = checar_status_transacao_ggpix(transaction_id)
         
     if not tx_info:
         if payment_record:
