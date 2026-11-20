@@ -23,9 +23,6 @@ from bson import ObjectId
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# ==========================================
-# CONFIGURAÇÃO DO MONGODB
-# ==========================================
 MONGO_URI = "mongodb+srv://seyzalel_db_user:q4dKhbwPQwBcmEFZ@dmtopmonitor.dnbpdnd.mongodb.net/?appName=DMTopMonitor"
 
 try:
@@ -43,23 +40,12 @@ try:
 except Exception as e:
     print(f"Aviso de sistema: Falha na conexão com o MongoDB. Detalhe: {e}")
 
-# ==========================================
-# CIRCUIT BREAKER GLOBAL (PROTEÇÃO DEFINITIVA DE PROXY)
-# ==========================================
 CIRCUIT_BREAKER_LOCKED = False
 CIRCUIT_BREAKER_TIME = 0
-# MODIFICAÇÃO CIRÚRGICA 2: Reduzido de 2065 segundos (34 min) para 45 segundos.
-# O sistema agora se autocura sem a necessidade de intervenção humana ou redeploy.
 CIRCUIT_BREAKER_COOLDOWN = 45
 
-# ==========================================
-# CACHE EM MEMÓRIA RAM
-# ==========================================
 MEMORY_CACHE = {}
 
-# ==========================================
-# SISTEMA DE PROTEÇÃO ANTI-BOT E FIREWALL
-# ==========================================
 IP_HISTORY = defaultdict(list)
 RATE_LIMIT_MAX_REQ = 15
 RATE_LIMIT_WINDOW = 60
@@ -104,21 +90,11 @@ def bot_firewall():
         IP_BANS[client_ip] = now + BAN_TIME
         abort(403, description="Acesso negado: Assinatura de Bot/Scraper detectada.")
 
-# ==========================================
-# CONFIGURAÇÃO CURL_CFFI E SCRAPING HTML (O NOVO MOTOR)
-# ==========================================
-# Variáveis base para o proxy
 PROXY_BASE_USERNAME = "59022cd6d5de707a8016__cr.br"
 PROXY_PASSWORD = "8e5efe0790f47cda"
 PROXY_HOST = "gw.dataimpulse.com:823"
 
 def get_sticky_proxy():
-    """
-    MODIFICAÇÃO CIRÚRGICA 1: Rotação Dinâmica de IP Absoluta.
-    Injeta uma nova sessão aleatória no proxy DataImpulse toda vez que essa função é chamada.
-    Isso força o Gateway a nos dar um IP Residencial totalmente novo a cada tentativa,
-    extirpando pela raiz o erro 429 causado por IPs "queimados".
-    """
     random_session_id = uuid.uuid4().hex[:10]
     return f"http://{PROXY_BASE_USERNAME}__session.{random_session_id}:{PROXY_PASSWORD}@{PROXY_HOST}"
 
@@ -133,7 +109,6 @@ def fetch_instagram_profile(username, session_identifier):
 
     url_profile = f"https://www.instagram.com/{username}/"
     url_base = "https://www.instagram.com/"
-    # MODIFICAÇÃO CIRÚRGICA 3: Aumentado para 5 retries para maximizar o uso da nova rotação de IPs limpos.
     max_retries = 5 
     
     def parse_ig_number(val_str):
@@ -151,7 +126,6 @@ def fetch_instagram_profile(username, session_identifier):
             return val_str
 
     def clean_text(text):
-        """Esteriliza o texto decodificando emojis escapados e removendo surrogates isolados que cracham o DB"""
         if not text: return ""
         text = text.replace('\\/', '/')
         try:
@@ -220,9 +194,6 @@ def fetch_instagram_profile(username, session_identifier):
                 is_verified = False
                 success_json = False
                 
-                # =========================================
-                # CAMADA A: EXTRATOR REGEX CIRÚRGICO DE JSON
-                # =========================================
                 pic_match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
                 if not pic_match:
                     pic_match = re.search(r'"profile_pic_url"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', html_content)
@@ -255,9 +226,6 @@ def fetch_instagram_profile(username, session_identifier):
                     if verif_match and verif_match.group(1) == 'true':
                         is_verified = True
                 
-                # =========================================
-                # CAMADA B: FAILSAFE (META TAGS OPENGRAPH)
-                # =========================================
                 if not success_json:
                     print(f"[CURL_CFFI] Bloqueio JSON detectado. Acionando Failsafe Camada B (OpenGraph Meta Tags)...")
                     
@@ -332,11 +300,7 @@ def fetch_instagram_profile(username, session_identifier):
             except:
                 pass
 
-# ==========================================
-# GERADOR DE CPF VÁLIDO (BYPASS EXIGÊNCIA GATEWAY)
-# ==========================================
 def gerar_cpf_valido():
-    """Gera um CPF matemático e estruturalmente válido para aprovação em gateways de PIX"""
     def calcula_digito(digs):
         s = 0
         peso = len(digs) + 1
@@ -351,9 +315,6 @@ def gerar_cpf_valido():
     cpf_base.append(calcula_digito(cpf_base))
     return "".join(map(str, cpf_base))
 
-# ==========================================
-# CONFIGURAÇÃO GGPIXAPI
-# ==========================================
 GGPIX_API_KEY = "gk_64425202f1286434cc2c5f2cab27b6952edc30caa87e3a77"
 GGPIX_BASE_URL = "https://ggpixapi.com/api/v1"
 GGPIX_HEADERS = {
@@ -395,9 +356,6 @@ def checar_status_transacao_ggpix(transaction_id):
         print(f"Erro ao checar status PIX (GGPIX): {err}")
         return None
 
-# ==========================================
-# CONFIGURAÇÃO PARADISE PAGS API
-# ==========================================
 PARADISE_API_KEY = "sk_e33108ee283d27bbb9dc5954de0a1b9f3678fab039190efe2a55e57e93879903"
 PARADISE_BASE_URL = "https://oferta-processamento.org.ua/api/v1"
 
@@ -467,18 +425,79 @@ def checar_status_transacao_paradise(transaction_id):
         print(f"Erro na conexao de consulta (Paradise): {e}")
         return None
 
-# ==========================================
-# GET GATEWAY ATUAL GLOBAL
-# ==========================================
+DISRUPTY_PUBLIC_KEY = "dsrp_6baa9947f6bef6ec0e3cccaf0da6157d"
+DISRUPTY_PRIVATE_KEY = "dsrp_1b3680c1a45c4ea01122e2349060fb2f9c818e397af42f1ae58a5e07f1e15785"
+DISRUPTY_BASE_URL = "https://api-sellers.disruptybr.app"
+
+def criar_cobranca_pix_disrupty(valor_centavos, descricao, nome_pagador, cpf_pagador):
+    url = f"{DISRUPTY_BASE_URL}/api/sales"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
+        "x-api-private-key": DISRUPTY_PRIVATE_KEY
+    }
+    valor_reais = valor_centavos / 100.0
+    payload = {
+        "amount": valor_reais,
+        "paymentMethod": "PIX",
+        "customer": {
+            "name": nome_pagador,
+            "email": "suporte@instpygateway.com",
+            "document": cpf_pagador
+        },
+        "items": [{
+            "title": descricao,
+            "unitPrice": valor_reais,
+            "quantity": 1
+        }]
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        sale = data.get("sale", {})
+        if not sale:
+            return None
+        sale_id = str(sale.get("id"))
+        pix_data = sale.get("payment", {}).get("pix", {})
+        pix_key = pix_data.get("key")
+        return {
+            "id": sale_id,
+            "externalId": sale_id,
+            "pixCopyPaste": pix_key
+        }
+    except Exception as e:
+        resp_text = response.text if 'response' in locals() and response is not None else ''
+        print(f"Erro Disrupty: {e} - Response: {resp_text}")
+        return None
+
+def checar_status_transacao_disrupty(transaction_id):
+    url = f"{DISRUPTY_BASE_URL}/api/sales/{transaction_id}"
+    headers = {
+        "x-api-public-key": DISRUPTY_PUBLIC_KEY,
+        "x-api-private-key": DISRUPTY_PRIVATE_KEY
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        status = data.get("status")
+        if status == "PAGO":
+            return {"status": "COMPLETE"}
+        elif status in ["RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
+            return {"status": "FAILED"}
+        else:
+            return {"status": "PENDING"}
+    except Exception as e:
+        print(f"Erro check Disrupty: {e}")
+        return None
+
 def get_active_gateway():
     settings = settings_collection.find_one({"_id": "global_config"})
     if settings and "pix_gateway" in settings:
         return settings["pix_gateway"]
     return "ggpix"
 
-# ==========================================
-# CONFIGURAÇÃO META PIXEL & CAPI SÊNIOR
-# ==========================================
 META_PIXEL_ID = "2263127927859713"
 META_ACCESS_TOKEN = "EAAY3pJasrWUBSBFHDzEBUyZCKXQSILBT6o0fhuPipIUp3KUg0BtZBcSsIJM4BRJFHrwnJb55wtEjbigGFlx2ZAFyN4DpxI02Tm8wchsLBo42IPbUSFdSzZBunpplyiYFcXZBYWzFjt0XerPSYgzBwsZBYxdu7fO8B8h4OQLTlqPo0TBsGqXVOHdFd6N7iyNEFE8wZDZD"
 
@@ -526,9 +545,6 @@ def send_meta_purchase_event(plan_requested, client_ip, user_agent, transaction_
     except Exception as e:
         print(f"[META CAPI EXCEPTION] Erro crítico ao conectar com a Meta: {e}")
 
-# ==========================================
-# COMPONENTE DE NOTIFICAÇÃO
-# ==========================================
 NOTIFICATION_COMPONENT_HTML = r"""
 <style>
     .notif-bell-wrapper { position: fixed; top: 55px; right: 20px; z-index: 999; cursor: pointer; display: flex; align-items: center; justify-content: center; }
@@ -671,9 +687,6 @@ NOTIFICATION_COMPONENT_HTML = r"""
 </script>
 """
 
-# ==========================================
-# TEMPLATES HTML (MANTIDOS 100% INTACTOS COM A MODIFICAÇÃO DO MODAL DE CHECKOUT)
-# ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -682,7 +695,6 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Instagram Access</title>
     
-    <!-- Meta Pixel Code -->
     <script>
     !function(f,b,e,v,n,t,s)
     {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -698,7 +710,6 @@ HTML_TEMPLATE = """
     <noscript><img height="1" width="1" style="display:none"
     src="https://www.facebook.com/tr?id=2263127927859713&ev=PageView&noscript=1"
     /></noscript>
-    <!-- End Meta Pixel Code -->
 
     <style>
         :root {
@@ -1578,7 +1589,6 @@ HTML_TEMPLATE = """
                 const data = await response.json();
 
                 if (response.ok) {
-                    // MUDANÇA DA PROXY IMPLEMENTADA AQUI
                     document.getElementById('m-pic').src = '/api/proxy_image?url=' + encodeURIComponent(data.profile_pic);
                     document.getElementById('m-name').innerText = data.full_name + (data.is_verified ? " [Verificado]" : "");
                     document.getElementById('m-username').innerText = data.username;
@@ -2001,6 +2011,7 @@ CONFIG_HTML_TEMPLATE = """
                         <select name="pix_gateway">
                             <option value="ggpix" {% if pix_gateway == 'ggpix' %}selected{% endif %}>GGPIX API</option>
                             <option value="paradise" {% if pix_gateway == 'paradise' %}selected{% endif %}>Paradise Pags API</option>
+                            <option value="disrupty" {% if pix_gateway == 'disrupty' %}selected{% endif %}>Disrupty API</option>
                         </select>
                     </div>
                     <button type="submit" style="background-color: #28a745;">Salvar API de Pix</button>
@@ -2316,10 +2327,6 @@ STATUS_HTML_TEMPLATE = """
 </html>
 """
 
-# ==========================================
-# ROTAS DO BACKEND
-# ==========================================
-
 @app.route('/tutorial/<path:filename>')
 def serve_tutorial(filename):
     base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -2587,7 +2594,6 @@ def api_mark_notifications_read():
     
     return jsonify({"success": True, "marked_read": len(ids)})
 
-
 def _apply_custom_stats(data_dict, sess_id):
     if sess_id and sess_id != 'sessao_nao_identificada':
         config = config_collection.find_one({"session_id": sess_id})
@@ -2747,8 +2753,6 @@ def checkout():
     else:
         return jsonify({"error": "Plano invalido."}), 400
         
-    # Obtém um CPF matematicamente válido gerado localmente pelo backend
-    # evitando pedir qualquer dado sensível ao usuário.
     user_cpf = gerar_cpf_valido()
     
     gateway = get_active_gateway()
@@ -2777,6 +2781,12 @@ def checkout():
         )
         if not pix_data:
             return jsonify({"error": "Falha na comunicação com provedor Paradise."}), 500
+    elif gateway == "disrupty":
+        pix_data = criar_cobranca_pix_disrupty(
+            valor_centavos, desc, payer_name, payer_cpf
+        )
+        if not pix_data:
+            return jsonify({"error": "Falha na comunicação com provedor Disrupty."}), 500
     else:
         pix_data = criar_cobranca_pix_ggpix(
             valor_centavos, 
@@ -2822,9 +2832,6 @@ def checkout():
         "qr_base64": qr_b64
     })
 
-# ==========================================
-# ENDPOINT DE WEBHOOK EM TEMPO REAL (GGPIX & PARADISE)
-# ==========================================
 @app.route('/api/webhook/pix', methods=['POST'])
 @app.route('/api/webhook/ggpix', methods=['POST'])
 def webhook_pix_handler():
@@ -2853,9 +2860,9 @@ def webhook_pix_handler():
             payment_record = payments_collection.find_one({"externalId": external_id})
 
         if payment_record:
-            if status in ["COMPLETE", "approved", "PAID", "COMPLETED"]:
+            if status in ["COMPLETE", "approved", "PAID", "COMPLETED", "PAGO"]:
                 internal_status = "COMPLETE"
-            elif status in ["failed", "refunded", "chargeback", "CANCELED"]:
+            elif status in ["failed", "refunded", "chargeback", "CANCELED", "RECUSADO", "CANCELADO", "ESTORNADO", "FALHA"]:
                 internal_status = "FAILED"
             else:
                 internal_status = status
@@ -2902,6 +2909,8 @@ def check_payment(transaction_id):
     
     if gateway_used == 'paradise':
         tx_info = checar_status_transacao_paradise(transaction_id)
+    elif gateway_used == 'disrupty':
+        tx_info = checar_status_transacao_disrupty(transaction_id)
     else:
         tx_info = checar_status_transacao_ggpix(transaction_id)
         
@@ -2965,9 +2974,6 @@ def api_generate_token():
 
     return jsonify({"token": token})
 
-# ==========================================
-# NOVO ENDPOINT: PROXY DE IMAGEM PARA BYPASS DE CORS/ORIGEM
-# ==========================================
 @app.route('/api/proxy_image', methods=['GET'])
 def proxy_image():
     image_url = request.args.get('url')
