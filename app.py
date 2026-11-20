@@ -2745,10 +2745,10 @@ def checkout():
     plan_requested = data.get('plan')
     
     if plan_requested == 'pro':
-        valor_centavos = 5000
+        valor_centavos = 4900
         desc = "Plano Pro - 1 Mes"
     elif plan_requested == 'premium':
-        valor_centavos = 7900
+        valor_centavos = 7800
         desc = "Plano Premium - 1 Mes"
     else:
         return jsonify({"error": "Plano invalido."}), 400
